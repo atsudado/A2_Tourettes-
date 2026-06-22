@@ -1,54 +1,31 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tactic — Tourette Awareness Platformer</title>
-    <link rel="stylesheet" href="style.css" />
-  </head>
-  <body>
-    <main class="page">
-      <section class="hero">
-        <div>
-          <p class="eyebrow">School Assignment • JavaScript Platformer</p>
-          <h1>Tactic</h1>
-          <p class="subtitle">
-            A rage-bait style platformer inspired by tricky games, designed to raise awareness about Tourette syndrome and tics.
-          </p>
-        </div>
-        <div class="controls-card">
-          <strong>Controls</strong>
-          <span>← / → Move</span>
-          <span>↑ Jump</span>
-          <span>R Restart level</span>
-        </div>
-      </section>
+<head>
+<meta charset="UTF-8">
+<title>TACTIC — A Platformer About Tourette Syndrome</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="game" width="1280" height="720"></canvas>
 
-      <section class="game-shell">
-        <canvas id="gameCanvas" width="960" height="540" aria-label="Tactic game canvas"></canvas>
-        <div class="mobile-controls" aria-hidden="true">
-          <button id="leftBtn">←</button>
-          <button id="jumpBtn">↑</button>
-          <button id="rightBtn">→</button>
-        </div>
-      </section>
+    <div id="hud">
+      <div id="level-label">Level 1</div>
+      <button id="restart-btn" title="Restart Level">⟲</button>
+    </div>
 
-      <section class="notes">
-        <article>
-          <h2>Awareness message</h2>
-          <p>
-            Tourette syndrome is a neurological condition involving tics: sudden, repeated movements or vocal sounds. The game mechanics are metaphors for how tics can feel unpredictable, triggered by situations, or delayed.
-          </p>
-        </article>
-        <article>
-          <h2>Disclaimer</h2>
-          <p>
-            This is a student awareness game, not a medical tool. Tourette syndrome affects people differently, and the game is meant to encourage empathy and understanding.
-          </p>
-        </article>
-      </section>
-    </main>
+    <div id="overlay" class="hidden">
+      <div id="overlay-box">
+        <h1 id="overlay-title">TACTIC</h1>
+        <p id="overlay-text"></p>
+        <button id="overlay-btn">Start</button>
+      </div>
+    </div>
 
-    <script src="src/game.js"></script>
-  </body>
+    <div id="controls-hint">← → move &nbsp;|&nbsp; ↑ / Space jump &nbsp;|&nbsp; Esc menu</div>
+  </div>
+
+  <script src="js/levels.js"></script>
+  <script src="js/game.js"></script>
+</body>
 </html>

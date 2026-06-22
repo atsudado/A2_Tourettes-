@@ -1,57 +1,27 @@
-# Tactic — Tourette Awareness Platformer
-
-Tactic is a small JavaScript platformer made for a school assignment. It is inspired by rage-bait/trick platformers, but the purpose is to raise awareness about Tourette syndrome and tics.
+# TACTIC
+A small browser platformer (vanilla HTML/CSS/JS, no build tools needed) made for a school
+assignment. Inspired by "Level Devil"-style rage-platformers, but reframed: each level's
+"gotcha" mechanic represents a different way a tic can present in Tourette Syndrome.
 
 ## How to run
-
-1. Unzip the folder.
-2. Open `index.html` in a web browser.
-3. Play using the keyboard.
-
-No install steps are required. The game uses only HTML, CSS, and vanilla JavaScript.
+Just open `index.html` in any modern browser (double-click it, or serve the folder with
+any static file server, e.g. `npx serve .` or `python3 -m http.server`).
 
 ## Controls
+- Left / Right arrow (or A / D): move
+- Up arrow / Space / W: jump
+- Esc: restart current level
+- ⟲ button (top-right): restart current level
 
-- Left arrow: move left
-- Right arrow: move right
-- Up arrow: jump
-- R: restart the current level
+## Levels
+1. **Irregular Small Tics** — a flashing red block appears without warning; jump over it.
+2. **Cause-and-Effect Tics** — the floor looks perfectly normal, but jumping near certain
+   spots causes the ground there to collapse a moment later. Triggered by your own action.
+3. **Delayed Tics** — two platforms swing back and forth on their own timing; you have to
+   read and time your jump to their rhythm rather than your own.
 
-The game also supports A/D/W and simple on-screen buttons for mobile testing.
-
-## Levels included
-
-### Level 1: Irregular Small Tics
-A straight horizontal level with one flashing red block in the middle. If the player touches the block, they die. The player must jump over it and reach the door.
-
-### Level 2: Cause-Effect Tics
-A straight horizontal level that looks flat at first. There are two invisible holes in the ground. When the player jumps, the hidden platforms fall down and the holes appear.
-
-### Level 3: Delayed Tics
-Two platforms move horizontally back and forth. The player must jump at the correct time to cross and reach the door.
-
-## Awareness goal
-
-Tourette syndrome is a neurological condition involving tics: sudden, repeated movements or vocal sounds. Tactic uses platformer obstacles as metaphors:
-
-- Irregular obstacles represent unpredictability.
-- Cause-effect traps represent situations that can make symptoms harder to control.
-- Delayed moving platforms represent timing, waiting, and adapting.
-
-This game is not a medical tool or a full simulation of Tourette syndrome. It is meant to encourage empathy and awareness.
-
-## Sources used for awareness wording
-
-- CDC: About Tourette Syndrome
-- NIH / NINDS: Tourette Syndrome
-
-## File structure
-
-```text
-tactic-platformer/
-├── index.html
-├── style.css
-├── README.md
-└── src/
-    └── game.js
-```
+## Files
+- `index.html` — page structure / HUD / overlays
+- `css/style.css` — visual styling
+- `js/levels.js` — level data (ground layout, hazards, moving platforms, door, intro text)
+- `js/game.js` — game engine: input, physics, collision, camera, rendering, level flow
