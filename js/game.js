@@ -70,8 +70,11 @@ function loadLevel(index) {
   };
 
   player = makePlayer(def.spawn);
-  camera.x = clampCamera(player.x);
+  camera.x = 0;
   levelLabel.textContent = def.title.split("—")[0].trim();
+
+  // ensure input state is reset
+  keys.left = keys.right = keys.up = false;
 
   // clear any previous Level 1 spawner
   if (hazardSpawner !== null) {
@@ -305,14 +308,20 @@ function update(dt) {
   updateTraps(dt);
 
   // horizontal input
-  player.vx = 0;
-  if (keys.left) {
-    player.vx = -MOVE_SPEED;
-    player.facing = -1;
-  }
-  if (keys.right) {
-    player.vx = MOVE_SPEED;
-    player.facing = 1;
+  // Normal levels use instant velocity for responsive controls.
+  // Level 3 has a slippery feel: smooth velocity changes both on ground and in the air.
+  const targetVx = keys.left ? -MOVE_SPEED : keys.right ? MOVE_SPEED : 0;
+  if (currentLevelIndex === 2 && player.grounded) {
+    // smaller accel => more slippery on ground only
+    const slipAccel = 1.0;
+    const blend = Math.min(1, slipAccel * dt);
+    player.vx += (targetVx - player.vx) * blend;
+    if (player.vx < 0) player.facing = -1;
+    else if (player.vx > 0) player.facing = 1;
+  } else {
+    player.vx = targetVx;
+    if (player.vx < 0) player.facing = -1;
+    else if (player.vx > 0) player.facing = 1;
   }
 
   // jump
@@ -401,8 +410,8 @@ function update(dt) {
     nextLevel();
   }
 
-  // camera follow
-  camera.x = clampCamera(player.x);
+  // fixed view: show full level instead of following the player
+  camera.x = 0;
 }
 
 function nextLevel() {
@@ -424,8 +433,12 @@ function draw() {
   ctx.fillStyle = "#c98c2e";
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
+  const scale = Math.min(1, VIEW_W / level.def.width);
+  const yOffset = (VIEW_H / scale - VIEW_H) / 2;
+
   ctx.save();
-  ctx.translate(-camera.x, 0);
+  ctx.translate(0, yOffset);
+  ctx.scale(scale, scale);
 
   // playable strip background (lighter band like the reference art)
   ctx.fillStyle = "#e8c25f";
@@ -439,8 +452,9 @@ function draw() {
   }
 
   // ground top edge highlight + trap ground tiles
+  const groundEdgeColor = currentLevelIndex === 2 ? "#b87a23" : "#b87a23";
   for (const seg of level.def.ground) {
-    ctx.fillStyle = "#b87a23";
+    ctx.fillStyle = groundEdgeColor;
     ctx.fillRect(seg.x, level.def.groundY, seg.width, 6);
   }
 
