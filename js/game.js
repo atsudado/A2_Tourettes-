@@ -27,6 +27,7 @@ let lastTime = null;
 let gameTime = 0;
 let levelStartOverlayShown = false;
 let deathFlashTimer = 0;
+let hazardSpawner = null; // interval ID for dynamic Level 1 hazard
 
 const overlay = document.getElementById("overlay");
 const overlayTitle = document.getElementById("overlay-title");
@@ -71,7 +72,55 @@ function loadLevel(index) {
   player = makePlayer(def.spawn);
   camera.x = clampCamera(player.x);
   levelLabel.textContent = def.title.split("—")[0].trim();
-  showLevelOverlay();
+
+  // clear any previous Level 1 spawner
+  if (hazardSpawner !== null) {
+    clearInterval(hazardSpawner);
+    hazardSpawner = null;
+  }
+
+  // Level 1: spawn a single dynamic red cube at a new random x every 1.5s
+  level.dynamicHazard = null;
+  if (index === 0) {
+    const hw = 40;
+    const hh = 50;
+    const minGapPlayer = 200; // avoid spawning too close to player center
+    const minGapDoor = 180; // avoid spawning too close to door center
+    const leftBound = 0;
+    const rightBound = Math.max(0, def.width - hw);
+    const pickX = () => {
+      let attempts = 0;
+      while (attempts < 50) {
+        const nx = Math.floor(Math.random() * (rightBound - leftBound + 1)) + leftBound;
+        const hazardCenter = nx + hw / 2;
+        const playerCenter = player.x + player.w / 2;
+        const doorCenter = def.door.x + def.door.width / 2;
+        if (
+          Math.abs(hazardCenter - playerCenter) >= minGapPlayer &&
+          Math.abs(hazardCenter - doorCenter) >= minGapDoor
+        ) {
+          return nx;
+        }
+        attempts++;
+      }
+      // fallback if we couldn't find a spot after many attempts
+      return Math.floor(Math.random() * (rightBound - leftBound + 1)) + leftBound;
+    };
+
+    level.dynamicHazard = { x: pickX(), width: hw, height: hh, flash: true };
+    hazardSpawner = setInterval(() => {
+      if (!level) return;
+      const oldX = level.dynamicHazard ? level.dynamicHazard.x : -9999;
+      let nx = pickX();
+      // avoid trivial repeats
+      let attempts = 0;
+      while (Math.abs(nx - oldX) < 8 && attempts < 8) {
+        nx = pickX();
+        attempts++;
+      }
+      level.dynamicHazard = { x: nx, width: hw, height: hh, flash: true };
+    }, 1500);
+  }
 }
 
 function clampCamera(targetX) {
@@ -89,6 +138,14 @@ function showLevelOverlay() {
   overlayBtn.textContent = "Start";
   overlay.classList.remove("hidden");
   levelStartOverlayShown = true;
+}
+
+function showStartOverlay() {
+  overlayTitle.textContent = "TACTIC";
+  overlayText.textContent = "Press Play to begin.";
+  overlayBtn.textContent = "Play";
+  overlay.classList.remove("hidden");
+  overlay.dataset.end = "";
 }
 
 function showEndOverlay() {
@@ -144,17 +201,49 @@ window.addEventListener("keyup", (e) => {
 // ------------------------------------------------------------
 
 function getGroundSegmentsAt(x) {
-  // returns array of {x, width, top} solid ground spans at world x
+  // returns array of {left, right, top} solid ground spans at world x
+  // Start with the defined ground segments, then subtract any fallen trap ranges
   const segs = [];
   for (const g of level.def.ground) {
     segs.push({ left: g.x, right: g.x + g.width, top: level.def.groundY });
   }
+
   for (const t of level.trapState) {
-    if (!t.fallen) {
-      segs.push({ left: t.x, right: t.x + t.width, top: level.def.groundY });
+    if (!t.fallen) continue;
+    const newSegs = [];
+    for (const s of segs) {
+      // no overlap
+      if (t.x >= s.right || t.x + t.width <= s.left) {
+        newSegs.push(s);
+        continue;
+      }
+      // left piece
+      if (t.x > s.left) {
+        newSegs.push({ left: s.left, right: Math.min(t.x, s.right), top: s.top });
+      }
+      // right piece
+      const rightStart = t.x + t.width;
+      if (rightStart < s.right) {
+        newSegs.push({ left: Math.max(rightStart, s.left), right: s.right, top: s.top });
+      }
+    }
+    segs.length = 0;
+    segs.push(...newSegs);
+  }
+
+  if (level.def.blocks && level.def.blocks.length) {
+    for (const b of level.def.blocks) {
+      segs.push({ left: b.x, right: b.x + b.width, top: level.def.groundY - b.height });
     }
   }
+
   return segs;
+}
+
+function getAllHazards() {
+  const staticHazards = level.def.hazards || [];
+  const dyn = level.dynamicHazard ? [level.dynamicHazard] : [];
+  return staticHazards.concat(dyn);
 }
 
 function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
@@ -237,7 +326,27 @@ function update(dt) {
   player.vy += GRAVITY * dt;
 
   // integrate horizontal
+  const prevX = player.x;
   player.x += player.vx * dt;
+
+  // horizontal collision with blocking `blocks` (solid obstacles)
+  if (level.def.blocks && level.def.blocks.length) {
+    for (const b of level.def.blocks) {
+      const bx = b.x;
+      const bTop = level.def.groundY - b.height;
+      if (rectsOverlap(player.x, player.y, player.w, player.h, bx, bTop, b.width, b.height)) {
+        if (player.x > prevX) {
+          // moved right into a block
+          player.x = bx - player.w;
+        } else if (player.x < prevX) {
+          // moved left into a block
+          player.x = bx + b.width;
+        }
+        player.vx = 0;
+      }
+    }
+  }
+
   player.x = Math.max(0, Math.min(level.def.width - player.w, player.x));
 
   // integrate vertical
@@ -272,7 +381,7 @@ function update(dt) {
   }
 
   // ---- hazards (flashing tic blocks) ----
-  for (const hz of level.def.hazards) {
+  for (const hz of getAllHazards()) {
     if (rectsOverlap(player.x, player.y, player.w, player.h, hz.x, level.def.groundY - hz.height, hz.width, hz.height)) {
       killPlayer();
       return;
@@ -365,8 +474,18 @@ function draw() {
     ctx.fillRect(px, p.y + 14, p.width, 8);
   }
 
+  // blocking blocks (solid obstacles the player must jump over)
+  for (const b of level.def.blocks || []) {
+    const top = level.def.groundY - b.height;
+    ctx.fillStyle = "#6b6b6b";
+    ctx.fillRect(b.x, top, b.width, b.height);
+    ctx.strokeStyle = "#444444";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(b.x, top, b.width, b.height);
+  }
+
   // hazards (flashing red tic blocks)
-  for (const hz of level.def.hazards) {
+  for (const hz of getAllHazards()) {
     const pulse = (Math.sin(gameTime * 9) + 1) / 2; // 0..1
     const r = Math.floor(180 + pulse * 75);
     ctx.fillStyle = `rgb(${r}, ${Math.floor(20 + pulse * 20)}, ${Math.floor(20 + pulse * 20)})`;
@@ -445,4 +564,5 @@ function frame(timestamp) {
 
 // kick things off
 loadLevel(0);
+showStartOverlay();
 requestAnimationFrame(frame);

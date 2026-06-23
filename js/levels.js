@@ -30,9 +30,7 @@ const LEVELS = [
     ],
     trapGround: [],
     movingPlatforms: [],
-    hazards: [
-      { x: 820, width: 40, height: 50, flash: true },
-    ],
+    hazards: [],
   },
 
   {
@@ -47,6 +45,10 @@ const LEVELS = [
     door: { x: 1780, width: 56, height: 90 },
     ground: [
       { x: 0, width: 1900 },
+    ],
+    blocks: [
+      { x: 460, width: 40, height: 80 },
+      { x: 1020, width: 40, height: 80 },
     ],
     trapGround: [
       { x: 560, width: 140, id: "t1" },
