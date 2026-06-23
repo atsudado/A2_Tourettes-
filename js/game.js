@@ -28,6 +28,7 @@ let gameTime = 0;
 let levelStartOverlayShown = false;
 let deathFlashTimer = 0;
 let hazardSpawner = null; // interval ID for dynamic Level 1 hazard
+let isPaused = false;
 
 const overlay = document.getElementById("overlay");
 const overlayTitle = document.getElementById("overlay-title");
@@ -73,8 +74,11 @@ function loadLevel(index) {
   camera.x = 0;
   levelLabel.textContent = def.title.split("—")[0].trim();
 
-  // ensure input state is reset
+  // ensure input state is reset and clear pause state
   keys.left = keys.right = keys.up = false;
+  isPaused = false;
+  const menuBtn = document.getElementById("overlay-menu-btn");
+  if (menuBtn) menuBtn.remove();
 
   // clear any previous Level 1 spawner
   if (hazardSpawner !== null) {
@@ -165,10 +169,18 @@ function showEndOverlay() {
 }
 
 overlayBtn.addEventListener("click", () => {
-  overlay.classList.add("hidden");
-  if (overlay.dataset.end === "1") {
+  if (overlay.dataset.pauseAction === "restart") {
+    overlay.dataset.pauseAction = "";
+    isPaused = false;
+    const menuBtn = document.getElementById("overlay-menu-btn");
+    if (menuBtn) menuBtn.remove();
+    loadLevel(currentLevelIndex);
+    overlay.classList.add("hidden");
+  } else if (overlay.dataset.end === "1") {
     overlay.dataset.end = "";
     loadLevel(0);
+    overlay.classList.add("hidden");
+  } else {
     overlay.classList.add("hidden");
   }
 });
@@ -184,7 +196,39 @@ window.addEventListener("keydown", (e) => {
     keys.up = true;
   }
   if (e.code === "Escape") {
-    loadLevel(currentLevelIndex);
+    if (!isPaused && overlay.classList.contains("hidden")) {
+      // show pause menu
+      isPaused = true;
+      overlayTitle.textContent = "PAUSED";
+      overlayText.textContent = "What would you like to do?";
+      overlayBtn.textContent = "Restart Level";
+      overlay.dataset.pauseAction = "restart";
+      overlay.classList.remove("hidden");
+      // add main menu button if not already there
+      let menuBtn = document.getElementById("overlay-menu-btn");
+      if (!menuBtn) {
+        menuBtn = document.createElement("button");
+        menuBtn.id = "overlay-menu-btn";
+        menuBtn.textContent = "Main Menu";
+        menuBtn.style.marginLeft = "10px";
+        overlayBtn.parentNode.insertBefore(menuBtn, overlayBtn.nextSibling);
+        menuBtn.addEventListener("click", () => {
+          isPaused = false;
+          overlay.dataset.pauseAction = "";
+          menuBtn.remove();
+          loadLevel(0);
+          overlay.classList.add("hidden");
+        });
+      }
+    } else if (isPaused) {
+      // ESC to resume
+      isPaused = false;
+      overlay.dataset.pauseAction = "";
+      const menuBtn = document.getElementById("overlay-menu-btn");
+      if (menuBtn) menuBtn.remove();
+      overlay.classList.add("hidden");
+    }
+    e.preventDefault();
   }
   if (["ArrowLeft", "ArrowRight", "ArrowUp", "Space"].includes(e.code)) {
     e.preventDefault();
