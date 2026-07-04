@@ -20,16 +20,15 @@ const PLAYER_H = 64;
 const TRAP_FALL_DELAY = 0.28; // seconds between jump-trigger and collapse
 const TRAP_TRIGGER_RANGE = 520; // how far from player a trap can be armed
 
-let currentLevelIndex = 0;
-let level = null;
+let world = null; // the one continuous map (mutable runtime state)
+let checkpoint = { x: 0, y: 0 }; // latest activated mailbox (or the world start)
 let player = null;
 let camera = { x: 0 };
 let keys = { left: false, right: false, up: false };
 let lastTime = null;
 let gameTime = 0;
-let levelStartOverlayShown = false;
 let deathFlashTimer = 0;
-let hazardSpawner = null; // interval ID for dynamic Level 1 hazard
+let hazardSpawner = null; // interval ID for the dynamic section-1 hazard
 let isPaused = false;
 
 const overlay = document.getElementById("overlay");
@@ -38,7 +37,6 @@ const overlayText = document.getElementById("overlay-text");
 const overlayBtn = document.getElementById("overlay-btn");
 const levelLabel = document.getElementById("level-label");
 const restartBtn = document.getElementById("restart-btn");
-const backBtn = document.getElementById("back-btn");
 
 const BOX_SRC = "assets/images/box.png";
 const HAZARD_W = 79;
@@ -134,34 +132,36 @@ function makePlayer(spawn) {
   };
 }
 
-function loadLevel(index) {
-  currentLevelIndex = index;
-  const def = LEVELS[index];
+function freshTrapState() {
+  return WORLD.trapGround.map((t) => ({
+    ...t,
+    // `prefallen` lets a section (e.g. the old Level 4's gap-seed) start
+    // already collapsed, so it renders as an open pit from the very first
+    // frame.
+    armed: t.prefallen || false,
+    fallTimer: 0,
+    fallen: t.prefallen || false,
+    fallOffset: t.prefallen ? 400 : 0,
+  }));
+}
+
+// Builds the one continuous map from scratch. Called once at startup and
+// again when the player returns to the main menu (a full game reset).
+function loadWorld() {
   blinkState = { visible: true, timer: 0 };
 
-  // deep-ish copy of mutable runtime state per level
-  level = {
-    def,
-    trapState: def.trapGround.map((t) => ({
-      ...t,
-      // `prefallen` lets a level (e.g. Level 4's gap-seed) start already
-      // collapsed, so it renders as an open pit from the very first frame.
-      armed: t.prefallen || false,
-      fallTimer: 0,
-      fallen: t.prefallen || false,
-      fallOffset: t.prefallen ? 400 : 0,
-    })),
-    movingPlatforms: def.movingPlatforms.map((p) => ({ ...p })),
+  world = {
+    def: WORLD,
+    trapState: freshTrapState(),
+    movingPlatforms: WORLD.movingPlatforms.map((p) => ({ ...p })),
+    // mutable copies so `activated` can flip on without touching WORLD
+    mailboxes: WORLD.mailboxes.map((m) => ({ ...m })),
   };
 
-  player = makePlayer(def.spawn);
-  camera.x = 0;
-  levelLabel.textContent = def.title.split("—")[0].trim();
-
-  // "back to previous level" only makes sense once you've moved past level 1
-  if (backBtn) {
-    backBtn.disabled = currentLevelIndex === 0;
-  }
+  checkpoint = { x: WORLD.spawn.x, y: WORLD.spawn.y };
+  player = makePlayer(checkpoint);
+  camera.x = clampCamera(player.x + player.w / 2);
+  updateLevelLabel();
 
   // ensure input state is reset and clear pause state
   keys.left = keys.right = keys.up = false;
@@ -169,70 +169,107 @@ function loadLevel(index) {
   const menuBtn = document.getElementById("overlay-menu-btn");
   if (menuBtn) menuBtn.remove();
 
-  // clear any previous Level 1 spawner
   if (hazardSpawner !== null) {
     clearInterval(hazardSpawner);
     hazardSpawner = null;
   }
 
-  // Level 1: spawn a single dynamic red cube at a new random x every 1.5s
-  level.dynamicHazard = null;
-  if (index === 0) {
-    const hw = HAZARD_W;
-    const hh = HAZARD_H;
-    const minGapPlayer = 200; // avoid spawning too close to player center
-    const minGapDoor = 180; // avoid spawning too close to door center
-    const leftBound = 0;
-    const rightBound = Math.max(0, def.width - hw);
-    const pickX = () => {
-      let attempts = 0;
-      while (attempts < 50) {
-        const nx =
-          Math.floor(Math.random() * (rightBound - leftBound + 1)) + leftBound;
-        const hazardCenter = nx + hw / 2;
-        const playerCenter = player.x + player.w / 2;
-        const doorCenter = def.door.x + def.door.width / 2;
-        if (
-          Math.abs(hazardCenter - playerCenter) >= minGapPlayer &&
-          Math.abs(hazardCenter - doorCenter) >= minGapDoor
-        ) {
-          return nx;
-        }
-        attempts++;
-      }
-      // fallback if we couldn't find a spot after many attempts
-      return (
-        Math.floor(Math.random() * (rightBound - leftBound + 1)) + leftBound
-      );
-    };
+  initDynamicHazard();
+  initGapExpansion();
+}
 
-    level.dynamicHazard = { x: pickX(), width: hw, height: hh, flash: true };
-    hazardSpawner = setInterval(() => {
-      if (!level) return;
-      const oldX = level.dynamicHazard ? level.dynamicHazard.x : -9999;
-      let nx = pickX();
-      // avoid trivial repeats
-      let attempts = 0;
-      while (Math.abs(nx - oldX) < 8 && attempts < 8) {
-        nx = pickX();
-        attempts++;
-      }
-      level.dynamicHazard = { x: nx, width: hw, height: hh, flash: true };
-    }, 1500);
-  }
+// Puts the player back at the latest checkpoint and resets the map's
+// resettable hazards (falling traps, the expanding gap, the flashing
+// hazard, the blink cycle) without touching already-activated mailboxes —
+// checkpoints, once reached, stay reached.
+function respawnPlayer() {
+  world.trapState = freshTrapState();
+  world.movingPlatforms = WORLD.movingPlatforms.map((p) => ({ ...p }));
+  blinkState = { visible: true, timer: 0 };
 
-  // Level 4: start the expanding-gap mechanic
-  if (index === 3) {
-    initGapExpansion();
+  if (hazardSpawner !== null) {
+    clearInterval(hazardSpawner);
+    hazardSpawner = null;
   }
+  initDynamicHazard();
+  initGapExpansion();
+
+  player = makePlayer(checkpoint);
+  camera.x = clampCamera(player.x + player.w / 2);
+  keys.left = keys.right = keys.up = false;
+}
+
+// The old dynamic red-cube hazard from "Level 1" — kept scoped to that
+// section's stretch of the map, since it was only ever meant to threaten
+// that part of the level.
+function initDynamicHazard() {
+  const section = WORLD.sections[0];
+  const doorForSection = world.mailboxes[0];
+  const hw = HAZARD_W;
+  const hh = HAZARD_H;
+  const minGapPlayer = 200; // avoid spawning too close to player center
+  const minGapDoor = 180; // avoid spawning too close to mailbox center
+  const leftBound = section.startX;
+  const rightBound = Math.max(section.startX, section.endX - hw);
+  const pickX = () => {
+    let attempts = 0;
+    while (attempts < 50) {
+      const nx =
+        Math.floor(Math.random() * (rightBound - leftBound + 1)) + leftBound;
+      const hazardCenter = nx + hw / 2;
+      const playerCenter = player.x + player.w / 2;
+      const doorCenter = doorForSection.x + doorForSection.width / 2;
+      if (
+        Math.abs(hazardCenter - playerCenter) >= minGapPlayer &&
+        Math.abs(hazardCenter - doorCenter) >= minGapDoor
+      ) {
+        return nx;
+      }
+      attempts++;
+    }
+    // fallback if we couldn't find a spot after many attempts
+    return (
+      Math.floor(Math.random() * (rightBound - leftBound + 1)) + leftBound
+    );
+  };
+
+  world.dynamicHazard = { x: pickX(), width: hw, height: hh, flash: true };
+  hazardSpawner = setInterval(() => {
+    if (!world) return;
+    const oldX = world.dynamicHazard ? world.dynamicHazard.x : -9999;
+    let nx = pickX();
+    // avoid trivial repeats
+    let attempts = 0;
+    while (Math.abs(nx - oldX) < 8 && attempts < 8) {
+      nx = pickX();
+      attempts++;
+    }
+    world.dynamicHazard = { x: nx, width: hw, height: hh, flash: true };
+  }, 1500);
+}
+
+// Which of the 5 original levels does world-x `x` fall inside? Drives the
+// section-specific mechanics below (slippery movement, the expanding gap,
+// the blink cycle) now that they all share one map instead of separate
+// pages.
+function getSectionIndexForX(x) {
+  for (const s of WORLD.sections) {
+    if (x >= s.startX && x < s.endX) return s.index;
+  }
+  return WORLD.sections[WORLD.sections.length - 1].index;
+}
+
+function updateLevelLabel() {
+  const idx = getSectionIndexForX(player.x);
+  levelLabel.textContent = WORLD.sections[idx].title.split("—")[0].trim();
 }
 
 function clampCamera(targetX) {
   const half = VIEW_W / 2;
   let cx = targetX - half;
   cx = Math.max(0, cx);
-  cx = Math.min(level.def.width - VIEW_W, cx);
-  if (level.def.width < VIEW_W) cx = 0;
+  cx = Math.min(Math.max(0, WORLD.width - VIEW_W), cx);
+  if (WORLD.width < VIEW_W) cx = 0;
   return cx;
 }
 
@@ -251,15 +288,6 @@ function setTitleBackground(active) {
   }
 }
 
-function showLevelOverlay() {
-  setTitleBackground(false);
-  overlayTitle.textContent = level.def.title;
-  overlayText.textContent = level.def.intro;
-  overlayBtn.textContent = "Start";
-  overlay.classList.remove("hidden");
-  levelStartOverlayShown = true;
-}
-
 function showStartOverlay() {
   setTitleBackground(true);
   overlayTitle.textContent = "TACTIC";
@@ -271,6 +299,9 @@ function showStartOverlay() {
 function showEndOverlay() {
   setTitleBackground(false);
 
+  overlayTitle.textContent = "You made it!";
+  overlayText.textContent =
+    "You've reached the end of the road, checkpoint by checkpoint.";
   overlayBtn.textContent = "Return To Menu";
   overlay.classList.remove("hidden");
   overlay.dataset.end = "1";
@@ -282,12 +313,12 @@ overlayBtn.addEventListener("click", () => {
     isPaused = false;
     const menuBtn = document.getElementById("overlay-menu-btn");
     if (menuBtn) menuBtn.remove();
-    loadLevel(currentLevelIndex);
+    respawnPlayer();
     overlay.classList.add("hidden");
   } else if (overlay.dataset.end === "1") {
     overlay.dataset.end = "";
 
-    loadLevel(0);
+    loadWorld();
     showStartOverlay();
   } else {
     overlay.classList.add("hidden");
@@ -295,16 +326,8 @@ overlayBtn.addEventListener("click", () => {
 });
 
 restartBtn.addEventListener("click", () => {
-  loadLevel(currentLevelIndex);
+  respawnPlayer();
 });
-
-if (backBtn) {
-  backBtn.addEventListener("click", () => {
-    if (currentLevelIndex > 0) {
-      loadLevel(currentLevelIndex - 1);
-    }
-  });
-}
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "ArrowLeft" || e.code === "KeyA") keys.left = true;
@@ -318,7 +341,7 @@ window.addEventListener("keydown", (e) => {
       isPaused = true;
       setTitleBackground(false);
       overlayTitle.textContent = "PAUSED";
-      overlayBtn.textContent = "Restart Level";
+      overlayBtn.textContent = "Restart From Checkpoint";
       overlay.dataset.pauseAction = "restart";
       overlay.classList.remove("hidden");
       // add main menu button if not already there
@@ -336,7 +359,7 @@ window.addEventListener("keydown", (e) => {
           const menuBtn = document.getElementById("overlay-menu-btn");
           if (menuBtn) menuBtn.remove();
 
-          loadLevel(0); // RESET GAME STATE
+          loadWorld(); // RESET GAME STATE (whole map, back to the first checkpoint)
           showStartOverlay(); // SHOW TITLE SCREEN PROPERLY
         });
       }
@@ -371,11 +394,11 @@ function getGroundSegmentsAt(x) {
   // returns array of {left, right, top} solid ground spans at world x
   // Start with the defined ground segments, then subtract any fallen trap ranges
   const segs = [];
-  for (const g of level.def.ground) {
-    segs.push({ left: g.x, right: g.x + g.width, top: level.def.groundY });
+  for (const g of world.def.ground) {
+    segs.push({ left: g.x, right: g.x + g.width, top: world.def.groundY });
   }
 
-  for (const t of level.trapState) {
+  for (const t of world.trapState) {
     if (!t.fallen) continue;
     const newSegs = [];
     for (const s of segs) {
@@ -406,12 +429,12 @@ function getGroundSegmentsAt(x) {
     segs.push(...newSegs);
   }
 
-  if (level.def.blocks && level.def.blocks.length) {
-    for (const b of level.def.blocks) {
+  if (world.def.blocks && world.def.blocks.length) {
+    for (const b of world.def.blocks) {
       segs.push({
         left: b.x,
         right: b.x + b.width,
-        top: level.def.groundY - b.height,
+        top: world.def.groundY - b.height,
       });
     }
   }
@@ -420,8 +443,8 @@ function getGroundSegmentsAt(x) {
 }
 
 function getAllHazards() {
-  const staticHazards = level.def.hazards || [];
-  const dyn = level.dynamicHazard ? [level.dynamicHazard] : [];
+  const staticHazards = world.def.hazards || [];
+  const dyn = world.dynamicHazard ? [world.dynamicHazard] : [];
   return staticHazards.concat(dyn);
 }
 
@@ -435,7 +458,7 @@ function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
 
 function triggerJumpTraps() {
   // Called the instant the player leaves the ground via a jump.
-  for (const t of level.trapState) {
+  for (const t of world.trapState) {
     if (t.armed || t.fallen) continue;
     const centerX = t.x + t.width / 2;
     if (Math.abs(centerX - (player.x + player.w / 2)) <= TRAP_TRIGGER_RANGE) {
@@ -450,12 +473,12 @@ function killPlayer() {
   player.alive = false;
   deathFlashTimer = 0.5;
   setTimeout(() => {
-    loadLevel(currentLevelIndex);
+    respawnPlayer();
   }, 420);
 }
 
 function updateMovingPlatforms(dt) {
-  for (const p of level.movingPlatforms) {
+  for (const p of world.movingPlatforms) {
     const t = gameTime * p.speed * 0.01 + p.phase * Math.PI;
     // ping-pong via sine wave for smooth back-and-forth motion
     const norm = (Math.sin(t) + 1) / 2; // 0..1
@@ -464,7 +487,7 @@ function updateMovingPlatforms(dt) {
 }
 
 function updateTraps(dt) {
-  for (const t of level.trapState) {
+  for (const t of world.trapState) {
     if (t.armed && !t.fallen) {
       t.fallTimer -= dt;
       if (t.fallTimer <= 0) {
@@ -477,23 +500,23 @@ function updateTraps(dt) {
   }
 }
 
-// ---------- Level 4 gap expansion ----------
-// Attached to `level` at load time as level.gapExpansion:
+// ---------- Section 4 (old "Level 4") gap expansion ----------
+// Attached to `world` at load time as world.gapExpansion:
 // {
 //   triggered: false,
-//   x: 380,           // left edge of gap (never moves)
-//   width: 80,        // current gap width — grows rightward
-//   maxWidth: 1640,   // stops just before the door shelf
-//   speed: 190,       // px/s the gap expands (tune this for difficulty)
+//   x: <section start> + 380, // left edge of gap (never moves)
+//   width: 80,                // current gap width — grows rightward
+//   maxWidth: 700,            // stops well short of the mailbox shelf
+//   speed: 190,               // px/s the gap expands (tune this for difficulty)
 // }
 function initGapExpansion() {
-  // maxWidth is tuned so the gap stops well short of the mailbox shelf
-  // (door sits at x:1150 on a level that's only 1280px wide now that the
-  // level width is fixed — it used to stop short of a door near x:2020 on
-  // a 2200-wide level, so this is the same margin scaled down).
-  level.gapExpansion = {
+  // Section 4 is the old Level 4. Its gap-seed trap lives at
+  // (section start + 380) in world space; maxWidth is tuned so the gap
+  // stops well short of that section's mailbox.
+  const section = WORLD.sections[3];
+  world.gapExpansion = {
     triggered: false,
-    x: 380,
+    x: section.startX + 380,
     width: 80,
     maxWidth: 700,
     speed: 190,
@@ -501,7 +524,7 @@ function initGapExpansion() {
 }
 
 function updateGapExpansion(dt) {
-  const g = level.gapExpansion;
+  const g = world.gapExpansion;
   if (!g) return;
 
   // Trigger: player has crossed the gap and is standing on the right side
@@ -518,7 +541,7 @@ function updateGapExpansion(dt) {
   g.width = Math.min(g.maxWidth, g.width + g.speed * dt);
 
   // Sync the trapState entry so the renderer and collision system see it
-  const t = level.trapState.find((t) => t.id === "gap-seed");
+  const t = world.trapState.find((t) => t.id === "gap-seed");
   if (t) {
     t.width = g.width;
     // Make sure it's in the fully-fallen state so it renders black and
@@ -528,9 +551,9 @@ function updateGapExpansion(dt) {
   }
 }
 
-// ---------- Level 5 blinking player ----------
+// ---------- Section 5 (old "Level 5") blinking player ----------
 function updateBlink(dt) {
-  if (currentLevelIndex !== 4) {
+  if (getSectionIndexForX(player.x) !== 4) {
     blinkState.visible = true;
     return;
   }
@@ -560,7 +583,7 @@ function update(dt) {
   // Normal levels use instant velocity for responsive controls.
   // Level 3 has a slippery feel: smooth velocity changes both on ground and in the air.
   const targetVx = keys.left ? -MOVE_SPEED : keys.right ? MOVE_SPEED : 0;
-  if (currentLevelIndex === 2 && player.grounded) {
+  if (getSectionIndexForX(player.x) === 2 && player.grounded) {
     // smaller accel => more slippery on ground only
     const slipAccel = 1.0;
     const blend = Math.min(1, slipAccel * dt);
@@ -588,10 +611,10 @@ function update(dt) {
   player.x += player.vx * dt;
 
   // horizontal collision with blocking `blocks` (solid obstacles)
-  if (level.def.blocks && level.def.blocks.length) {
-    for (const b of level.def.blocks) {
+  if (world.def.blocks && world.def.blocks.length) {
+    for (const b of world.def.blocks) {
       const bx = b.x;
-      const bTop = level.def.groundY - b.height;
+      const bTop = world.def.groundY - b.height;
       if (
         rectsOverlap(
           player.x,
@@ -636,7 +659,7 @@ function update(dt) {
     }
   }
 
-  player.x = Math.max(0, Math.min(level.def.width - player.w, player.x));
+  player.x = Math.max(0, Math.min(world.def.width - player.w, player.x));
 
   // integrate vertical
   player.y += player.vy * dt;
@@ -660,7 +683,7 @@ function update(dt) {
   }
 
   // ---- collisions: moving platforms ----
-  for (const p of level.movingPlatforms) {
+  for (const p of world.movingPlatforms) {
     const px = p.currentX !== undefined ? p.currentX : p.x;
     const overlapX = player.x + player.w > px && player.x < px + p.width;
     const top = p.y;
@@ -683,7 +706,7 @@ function update(dt) {
   // hz.y lets a level (e.g. Level 5's airborne hazards) place a hazard at an
   // explicit height instead of sitting on the ground.
   for (const hz of getAllHazards()) {
-    const hzY = hz.y !== undefined ? hz.y : level.def.groundY - hz.height;
+    const hzY = hz.y !== undefined ? hz.y : world.def.groundY - hz.height;
     if (
       rectsOverlap(
         player.x,
@@ -702,45 +725,54 @@ function update(dt) {
   }
 
   // ---- fell into a pit / off the world ----
-  // level.def.fallLimit lets a level (e.g. Level 5's tall vertical climb)
-  // override the default "300px below ground" death threshold.
-  const fallLimit =
-    level.def.fallLimit !== undefined
-      ? level.def.fallLimit
-      : level.def.groundY + 300;
+  // Each section keeps its own "how far can you fall before you die" rule
+  // (e.g. the old Level 5's tall vertical climb needed a much lower limit
+  // than the default), chosen by whichever section the player is over.
+  const fallLimit = WORLD.sections[getSectionIndexForX(player.x)].fallLimit;
   if (player.y > fallLimit) {
     killPlayer();
     return;
   }
 
-  // ---- mailbox (door) / level complete ----
-  // d.y lets a level (e.g. Level 5's door perched up high) override the
-  // default "sitting on the ground" door position. Hitbox size (56x90)
-  // is unchanged and still matches mailbox.png exactly.
-  const d = level.def.door;
-  const doorTop = d.y !== undefined ? d.y : level.def.groundY - d.height;
-  if (
-    rectsOverlap(
-      player.x,
-      player.y,
-      player.w,
-      player.h,
-      d.x,
-      doorTop,
-      d.width,
-      d.height,
-    )
-  ) {
-    nextLevel();
+  // ---- mailbox checkpoints ----
+  // mb.y lets a section (e.g. the old Level 5's door perched up high)
+  // override the default "sitting on the ground" position. Hitbox size
+  // (56x90) is unchanged and still matches mailbox.png exactly. Touching
+  // a mailbox sets it as the respawn point; it no longer ends the level.
+  for (const mb of world.mailboxes) {
+    const mbTop = mb.y !== undefined ? mb.y : world.def.groundY - mb.height;
+    if (
+      rectsOverlap(
+        player.x,
+        player.y,
+        player.w,
+        player.h,
+        mb.x,
+        mbTop,
+        mb.width,
+        mb.height,
+      )
+    ) {
+      activateCheckpoint(mb);
+    }
   }
 
-  // fixed view: show full level instead of following the player
-  camera.x = 0;
+  updateLevelLabel();
+
+  // scroll the camera to follow the player across the full continuous map
+  camera.x = clampCamera(player.x + player.w / 2);
 }
 
-function nextLevel() {
-  if (currentLevelIndex + 1 < LEVELS.length) {
-    loadLevel(currentLevelIndex + 1);
+// Marks a mailbox as this run's latest checkpoint (once). If it's the very
+// last mailbox on the map, that's the finish line instead.
+function activateCheckpoint(mb) {
+  if (mb.activated) return;
+  mb.activated = true;
+
+  const nextIndex = mb.sectionIndex + 1;
+  if (nextIndex < WORLD.sections.length) {
+    const nextSpawn = WORLD.sections[nextIndex].spawn;
+    checkpoint = { x: nextSpawn.x, y: nextSpawn.y };
   } else {
     showEndOverlay();
   }
@@ -762,32 +794,36 @@ function draw() {
   }
 
   ctx.save();
+  // shift the whole world left by the camera's position so the section
+  // currently under the player is what's visible — everything below is
+  // drawn in world (not screen) coordinates.
+  ctx.translate(-camera.x, 0);
 
   // ground line — semi-transparent so the dirt texture from levelbg.png
   // shows through instead of being completely hidden behind a flat fill
   ctx.fillStyle = "rgba(191, 191, 191, 0)";
-  for (const g of level.def.ground) {
-    ctx.fillRect(g.x, level.def.groundY, g.width, VIEW_H);
+  for (const g of world.def.ground) {
+    ctx.fillRect(g.x, world.def.groundY, g.width, VIEW_H);
   }
 
-  for (const t of level.trapState) {
+  for (const t of world.trapState) {
     if (t.fallen) {
       // falling slab graphic dropping out of view
       ctx.fillStyle = "tan";
-      ctx.fillRect(t.x, level.def.groundY + t.fallOffset, t.width, 14);
+      ctx.fillRect(t.x, world.def.groundY + t.fallOffset, t.width, 14);
       // pit interior (darker) revealed behind it
       ctx.fillStyle = "black";
-      ctx.fillRect(t.x, level.def.groundY, t.width, VIEW_H);
+      ctx.fillRect(t.x, world.def.groundY, t.width, VIEW_H);
     } else if (t.armed) {
       // subtle pre-collapse tremor cue
       const shake = Math.sin(gameTime * 60) * 2;
       ctx.fillStyle = "rgba(0,0,0,0.15)";
-      ctx.fillRect(t.x + shake, level.def.groundY, t.width, 6);
+      ctx.fillRect(t.x + shake, world.def.groundY, t.width, 6);
     }
   }
 
   // moving platforms
-  for (const p of level.movingPlatforms) {
+  for (const p of world.movingPlatforms) {
     const px = p.currentX !== undefined ? p.currentX : p.x;
     ctx.fillStyle = "#caa24c";
     ctx.fillRect(px, p.y, p.width, 14);
@@ -796,8 +832,8 @@ function draw() {
   }
 
   // blocking blocks (solid obstacles the player must jump over)
-  for (const b of level.def.blocks || []) {
-    const top = level.def.groundY - b.height;
+  for (const b of world.def.blocks || []) {
+    const top = world.def.groundY - b.height;
     ctx.fillStyle = "#6b6b6b";
     ctx.fillRect(b.x, top, b.width, b.height);
     ctx.strokeStyle = "#444444";
@@ -807,7 +843,7 @@ function draw() {
 
   // hazards (box tics)
   for (const hz of getAllHazards()) {
-    const hzY = hz.y !== undefined ? hz.y : level.def.groundY - hz.height;
+    const hzY = hz.y !== undefined ? hz.y : world.def.groundY - hz.height;
 
     if (boxLoaded) {
       ctx.drawImage(boxImg, hz.x, hzY, hz.width, hz.height);
@@ -818,17 +854,25 @@ function draw() {
     }
   }
 
-  // mailbox (door / level exit), honoring d.y override
-  const d = level.def.door;
-  const doorTop = d.y !== undefined ? d.y : level.def.groundY - d.height;
-  if (mailboxLoaded) {
-    ctx.drawImage(mailboxImg, d.x, doorTop, d.width, d.height);
-  } else {
-    // flat-color fallback if the art hasn't loaded yet / failed to load
-    ctx.fillStyle = "#9c6b2a";
-    ctx.fillRect(d.x - 6, doorTop - 6, d.width + 12, d.height + 6);
-    ctx.fillStyle = "#c9c9c9";
-    ctx.fillRect(d.x, doorTop, d.width, d.height);
+  // mailbox checkpoints, honoring each one's mb.y override
+  for (const mb of world.mailboxes) {
+    const mbTop = mb.y !== undefined ? mb.y : world.def.groundY - mb.height;
+
+    if (mb.activated) {
+      // soft glow behind an already-activated checkpoint
+      ctx.fillStyle = "rgba(90, 210, 120, 0.35)";
+      ctx.fillRect(mb.x - 10, mbTop - 10, mb.width + 20, mb.height + 20);
+    }
+
+    if (mailboxLoaded) {
+      ctx.drawImage(mailboxImg, mb.x, mbTop, mb.width, mb.height);
+    } else {
+      // flat-color fallback if the art hasn't loaded yet / failed to load
+      ctx.fillStyle = "#9c6b2a";
+      ctx.fillRect(mb.x - 6, mbTop - 6, mb.width + 12, mb.height + 6);
+      ctx.fillStyle = "#c9c9c9";
+      ctx.fillRect(mb.x, mbTop, mb.width, mb.height);
+    }
   }
 
   // player
@@ -922,7 +966,7 @@ function frame(timestamp) {
 }
 
 preloadAllAssets().then(() => {
-  loadLevel(0);
+  loadWorld();
   showStartOverlay();
   requestAnimationFrame(frame);
 });

@@ -112,3 +112,96 @@ const LEVELS = [
     ],
   },
 ];
+
+// ============================================================
+// WORLD — merges the 5 formerly-separate levels above into one
+// continuous, seamlessly-scrolling map.
+//
+// Each level's content is shifted rightward by the combined width of all
+// levels before it, so level 2 starts exactly where level 1 ends, and so
+// on. Every level's original layout (ground, blocks, traps, moving
+// platforms, hazards) is preserved untouched relative to its own section
+// — only the x-offset changes.
+//
+// Each level's former "door" becomes a mailbox checkpoint: touching
+// mailbox N sets the player's respawn point to the start of section N+1
+// (exactly where the old door used to send you). Touching the final
+// mailbox ends the game, same as finishing the old level 5.
+// ============================================================
+function buildWorld(levels) {
+  const sections = [];
+  const ground = [];
+  const trapGround = [];
+  const movingPlatforms = [];
+  const hazards = [];
+  const blocks = [];
+  const mailboxes = [];
+
+  let offsetX = 0;
+
+  levels.forEach((def, i) => {
+    const startX = offsetX;
+    const endX = startX + def.width;
+
+    sections.push({
+      index: i,
+      title: def.title,
+      intro: def.intro,
+      startX,
+      endX,
+      spawn: { x: startX + def.spawn.x, y: def.spawn.y },
+      // Preserve each level's own "how far can you fall before you die"
+      // rule (Level 5's tall vertical climb needed a much lower limit
+      // than the default).
+      fallLimit:
+        def.fallLimit !== undefined ? def.fallLimit : def.groundY + 300,
+    });
+
+    for (const g of def.ground) {
+      ground.push({ x: startX + g.x, width: g.width });
+    }
+    for (const t of def.trapGround) {
+      trapGround.push({ ...t, x: startX + t.x });
+    }
+    for (const p of def.movingPlatforms) {
+      movingPlatforms.push({ ...p, x: startX + p.x });
+    }
+    for (const hz of def.hazards) {
+      hazards.push({ ...hz, x: startX + hz.x });
+    }
+    for (const b of def.blocks || []) {
+      blocks.push({ ...b, x: startX + b.x });
+    }
+
+    const d = def.door;
+    mailboxes.push({
+      x: startX + d.x,
+      y: d.y, // undefined => sits on the shared ground line
+      width: d.width,
+      height: d.height,
+      sectionIndex: i,
+      activated: false,
+    });
+
+    offsetX = endX;
+  });
+
+  return {
+    width: offsetX,
+    // Shared ground baseline. Only levels 1-4 use flat "ground" collision
+    // (all authored at groundY:550); level 5 places every platform and
+    // hazard at an explicit y and never touches this value, so one shared
+    // number works fine for the whole combined world.
+    groundY: 550,
+    spawn: { x: sections[0].spawn.x, y: sections[0].spawn.y },
+    sections,
+    ground,
+    trapGround,
+    movingPlatforms,
+    hazards,
+    blocks,
+    mailboxes,
+  };
+}
+
+const WORLD = buildWorld(LEVELS);

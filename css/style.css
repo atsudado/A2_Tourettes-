@@ -58,8 +58,7 @@ canvas {
   pointer-events: all;
 }
 
-#restart-btn,
-#back-btn {
+#restart-btn {
   pointer-events: all;
   background: #3a2c1a;
   border: 2px solid #f5e3b3;
@@ -71,18 +70,8 @@ canvas {
   border-radius: 4px;
 }
 
-#restart-btn:hover,
-#back-btn:hover {
+#restart-btn:hover {
   background: #55421f;
-}
-
-#back-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-#back-btn:disabled:hover {
-  background: #3a2c1a;
 }
 
 #controls-hint {
