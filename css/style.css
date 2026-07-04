@@ -4,12 +4,13 @@
   box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
   width: 100%;
   height: 100%;
   background: #1a1410;
   overflow: hidden;
-  font-family: 'Courier New', monospace;
+  font-family: "Courier New", monospace;
 }
 
 #game-container {
@@ -50,7 +51,15 @@ canvas {
   pointer-events: none;
 }
 
-#restart-btn {
+#hud-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: all;
+}
+
+#restart-btn,
+#back-btn {
   pointer-events: all;
   background: #3a2c1a;
   border: 2px solid #f5e3b3;
@@ -62,8 +71,18 @@ canvas {
   border-radius: 4px;
 }
 
-#restart-btn:hover {
+#restart-btn:hover,
+#back-btn:hover {
   background: #55421f;
+}
+
+#back-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+#back-btn:disabled:hover {
+  background: #3a2c1a;
 }
 
 #controls-hint {
@@ -80,7 +99,10 @@ canvas {
 
 #overlay {
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: rgba(10, 7, 4, 0.88);
   display: flex;
   align-items: center;
@@ -90,6 +112,16 @@ canvas {
 
 #overlay.hidden {
   display: none;
+}
+
+/* Title screen only: swap the plain dark overlay for the drawn title art.
+   titlebg.png already contains the "TACTIC / TITLE PAGE" lettering, so
+   game.js hides the dynamic <h1> while this class is active. */
+#overlay.title-bg {
+  background-image: url("../assets/images/titlebg.png");
+  background-size: cover;
+  background-position: center;
+  background-color: transparent;
 }
 
 #overlay-box {
@@ -115,10 +147,11 @@ canvas {
 }
 
 #overlay-btn {
-  background: #e8c25f;
-  border: none;
+  background: WhiteSmoke;
+  margin-top: 350px;
+  border: 5px solid #4b2a29;
   color: #1a1410;
-  font-family: 'Courier New', monospace;
+  font-family: "Courier New", monospace;
   font-weight: bold;
   font-size: 18px;
   padding: 12px 32px;
