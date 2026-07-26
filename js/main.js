@@ -333,9 +333,11 @@ function loadWorld(levelIndex = 0, spawnOverride = null) {
     })),
   };
 
-  // Restore each checkpoint's activated/glow state from the saved
-  // Progress (level-select.js) rather than always starting blank, so
-  // returning to the main menu doesn't visually "forget" cleared stages.
+  // Start each fresh run with mailboxes in their default up state.
+  // We only restore the saved completed-state for the current run once
+  // the player has actually passed a stage and the progress save says it
+  // should already be cleared.
+  resetMailboxStatesForRun();
   syncMailboxActivationFromProgress();
 
   checkpoint = spawnOverride || { x: WORLD.spawn.x, y: WORLD.spawn.y };
@@ -1107,17 +1109,16 @@ function update(dt) {
   // a mailbox sets it as the respawn point; it no longer ends the level.
   for (const mb of world.mailboxes) {
     const mbTop = mb.y !== undefined ? mb.y : world.def.groundY - mb.height;
+    const playerCenterX = player.x + player.w / 2;
+    const playerCenterY = player.y + player.h / 2;
+    const mbCenterX = mb.x + mb.width / 2;
+    const mbCenterY = mbTop + mb.height / 2;
+    const horizontalPadding = 8;
+    const verticalPadding = 10;
+
     if (
-      rectsOverlap(
-        player.x,
-        player.y,
-        player.w,
-        player.h,
-        mb.x,
-        mbTop,
-        mb.width,
-        mb.height,
-      )
+      Math.abs(playerCenterX - mbCenterX) < (player.w / 2 + mb.width / 2 + horizontalPadding) &&
+      Math.abs(playerCenterY - mbCenterY) < (player.h / 2 + mb.height / 2 + verticalPadding)
     ) {
       activateCheckpoint(mb);
     }
@@ -1138,6 +1139,10 @@ function update(dt) {
 function activateCheckpoint(mb) {
   if (mb.activated) return;
   mb.activated = true;
+  checkpoint = {
+    x: mb.x,
+    y: mb.y !== undefined ? mb.y : world.def.groundY - mb.height,
+  };
   playMailboxBellSound();
 
   Progress.completeStage(mb.levelIndex, mb.stageIndex);
@@ -1188,19 +1193,23 @@ function draw() {
   // drawn in world (not screen) coordinates.
   ctx.translate(-camera.x, 0);
 
-  // ground/backdrop art — BG.png spans the entire map (one continuous
-  // image, not a per-screen tile), so it's drawn once in world space here
-  // and naturally pans/cycles under the player as the camera scrolls
-  // across each checkpoint, instead of sitting fixed to the screen.
-  if (levelBgLoaded) {
-    // Crop (not stretch) BG.png so it's reused at native scale — matters
-    // now that not every level's map is the same width as the original
-    // 6400px-wide Level 1 map (e.g. Level 2's map is narrower). Tiles the
-    // image if a level's map is ever wider than one copy of BG.png.
-    const bgW = levelBgImg.naturalWidth || world.def.width;
-    for (let tx = 0; tx < world.def.width; tx += bgW) {
-      const drawW = Math.min(bgW, world.def.width - tx);
-      ctx.drawImage(levelBgImg, 0, 0, drawW, VIEW_H, tx, 0, drawW, VIEW_H);
+  // ground/backdrop art — BG.png is the shared backdrop for Levels 1 and 2,
+  // spanning the whole map as a continuous image instead of a per-screen
+  // tile, so it pans naturally with the camera as the player moves.
+  const useSharedLevelBg = world.def.levelIndex === 0 || world.def.levelIndex === 1;
+  if (useSharedLevelBg && levelBgLoaded) {
+    // Scale BG.png to the viewport height while preserving its exact
+    // aspect ratio, then tile that scaled copy across the level width.
+    const bgW = levelBgImg.naturalWidth || 1;
+    const bgH = levelBgImg.naturalHeight || VIEW_H;
+    const scale = VIEW_H / bgH;
+    const drawW = bgW * scale;
+    const drawH = VIEW_H;
+    const tileCount = Math.ceil(world.def.width / drawW);
+
+    for (let i = 0; i < tileCount; i++) {
+      const tx = i * drawW;
+      ctx.drawImage(levelBgImg, 0, 0, bgW, bgH, tx, 0, drawW, drawH);
     }
   } else {
     ctx.fillStyle = "#d0d0d0";

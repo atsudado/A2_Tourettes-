@@ -151,6 +151,13 @@ function syncMailboxActivationFromProgress() {
   }
 }
 
+function resetMailboxStatesForRun() {
+  if (!world || !world.mailboxes) return;
+  for (const mb of world.mailboxes) {
+    mb.activated = false;
+  }
+}
+
 // Jumps straight into a specific stage, as if the player had just hit
 // the checkpoint before it. If this stage belongs to a different level
 // than the one currently loaded, loadWorld() fully swaps the active
