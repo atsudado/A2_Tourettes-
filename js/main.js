@@ -28,6 +28,10 @@ let gameTime = 0;
 let deathFlashTimer = 0;
 let hazardSpawner = null; // interval ID(s) for the dynamic Stage 1 hazards (array)
 let isPaused = false;
+// Seconds remaining on a bird-chirp freeze (Level 2) — while > 0, all
+// player controls are locked. Reset to 0 whenever the world (re)loads.
+let freezeTimer = 0;
+const BIRD_FREEZE_DURATION = 1.5;
 
 const overlay = document.getElementById("overlay");
 const overlayTitle = document.getElementById("overlay-title");
@@ -69,20 +73,13 @@ const whitedogImg = new Image();
 whitedogImg.src = WHITEDOG_SRC;
 let whitedogLoaded = false;
 
-// Level 2's decorative trees (L2-1, L2-2) — background art only, no
-// collision. Birds perched in them use dogImg above (no bird sprite yet).
+// Level 2's decorative trees. Birds perched in them reuse dogImg above
+// (see TREE_DRAW_W/BIRD_DRAW_W etc. in levels.js) rather than loading a
+// separate sprite, since dedicated bird art isn't ready yet.
 const TREE_SRC = "assets/images/tree.png";
 const treeImg = new Image();
 treeImg.src = TREE_SRC;
 let treeLoaded = false;
-// tree.png's native aspect ratio (779x1177), used to derive a draw height
-// from each tree's `width` in levels.js so the art never looks stretched.
-const TREE_ASPECT = 1177 / 779;
-
-// Birds perch near the top of the canopy and use dogImg as a stand-in
-// sprite (no bird art yet), scaled down well below dog.png's native size.
-const BIRD_W = 46;
-const BIRD_H = 33;
 
 const SPRITE_SHEET_SRC = "assets/images/mailman.png";
 
@@ -131,7 +128,7 @@ function initAudio() {
   mailboxBellSound.preload = "auto";
 
   birdChirpSound = new Audio("assets/sounds/bird_chirp.mp3");
-  birdChirpSound.volume = 0.6;
+  birdChirpSound.volume = 0.55;
   birdChirpSound.preload = "auto";
 }
 
@@ -292,10 +289,6 @@ function makePlayer(spawn) {
     facing: 1,
     alive: true,
     standingTrapId: null,
-    // Set true for 1.5s whenever a bird chirp catches the player nearby
-    // (Level 2) — controls locked, all motion frozen. See freezePlayer().
-    frozen: false,
-    freezeTimer: 0,
   };
 }
 
@@ -312,9 +305,16 @@ function freshTrapState() {
   }));
 }
 
-// Builds the one continuous map from scratch. Called once at startup and
-// again when the player returns to the main menu (a full game reset).
-function loadWorld() {
+// Builds a level's map from scratch. Called at startup, when the player
+// returns to the main menu (a full reset to Level 1), and whenever the
+// level-select screen sends the player into a stage — including one in a
+// different level, in which case `levelIndex` swaps the active WORLD
+// definition entirely (its own width/ground/hazards/birds/etc.), so there
+// is no shared coordinate space a player could walk back through into a
+// previous level's map.
+function loadWorld(levelIndex = 0, spawnOverride = null) {
+  setActiveLevel(levelIndex); // reassigns the global WORLD (see levels.js)
+
   world = {
     def: WORLD,
     trapState: freshTrapState(),
@@ -325,12 +325,11 @@ function loadWorld() {
     groundHazards: (WORLD.groundHazards || []).map((g) => ({ ...g })),
     // mutable copies so `activated` can flip on without touching WORLD
     mailboxes: WORLD.mailboxes.map((m) => ({ ...m })),
-    // Level 2's chirping birds — each gets its own randomized countdown
-    // to its next chirp (see updateBirds()).
-    birds: (WORLD.birds || []).map((b) => ({
+    // Level 2+'s perched birds — mutable copies since each needs its own
+    // countdown to its next chirp.
+    birdState: (WORLD.birds || []).map((b) => ({
       ...b,
-      chirpTimer: randomChirpDelay(b),
-      chirpFlashTimer: 0,
+      chirpTimer: randomBirdInterval(),
     })),
   };
 
@@ -339,14 +338,15 @@ function loadWorld() {
   // returning to the main menu doesn't visually "forget" cleared stages.
   syncMailboxActivationFromProgress();
 
-  checkpoint = { x: WORLD.spawn.x, y: WORLD.spawn.y };
+  checkpoint = spawnOverride || { x: WORLD.spawn.x, y: WORLD.spawn.y };
   player = makePlayer(checkpoint);
   camera.x = clampCamera(player.x + player.w / 2);
   updateLevelLabel();
 
-  // ensure input state is reset and clear pause state
+  // ensure input state is reset and clear pause/freeze state
   keys.left = keys.right = keys.up = false;
   isPaused = false;
+  freezeTimer = 0;
   const menuBtn = document.getElementById("overlay-menu-btn");
   if (menuBtn) menuBtn.remove();
 
@@ -360,18 +360,20 @@ function loadWorld() {
   initGapExpansion();
 }
 
-// Puts the player back at the latest checkpoint and resets the map's
-// resettable hazards (falling traps, the expanding gap) without touching
-// already-activated mailboxes — checkpoints, once reached, stay reached.
+// Puts the player back at the latest checkpoint and resets the current
+// level's resettable hazards (falling traps, the expanding gap, bird
+// chirp timers) without touching already-activated mailboxes —
+// checkpoints, once reached, stay reached. Never changes which level is
+// active; that only happens via loadWorld().
 function respawnPlayer() {
   world.trapState = freshTrapState();
   world.movingPlatforms = WORLD.movingPlatforms.map((p) => ({ ...p }));
   world.groundHazards = (WORLD.groundHazards || []).map((g) => ({ ...g }));
-  world.birds = (WORLD.birds || []).map((b) => ({
+  world.birdState = (WORLD.birds || []).map((b) => ({
     ...b,
-    chirpTimer: randomChirpDelay(b),
-    chirpFlashTimer: 0,
+    chirpTimer: randomBirdInterval(),
   }));
+  freezeTimer = 0;
 
   if (hazardSpawner !== null) {
     // hazardSpawner is now an array of interval IDs (one per dynamic dog)
@@ -395,6 +397,14 @@ function respawnPlayer() {
 const DYNAMIC_HAZARD_COUNT = 2;
 
 function initDynamicHazard() {
+  // This mechanic is specific to Level 1 / Stage 1 — other levels (e.g.
+  // Level 2) don't have this dynamic teleporting hazard at all.
+  if (WORLD.levelIndex !== 0) {
+    world.dynamicHazards = [];
+    hazardSpawner = [];
+    return;
+  }
+
   const section = WORLD.sections[0];
   const doorForSection = world.mailboxes[0];
   const hw = HAZARD_W;
@@ -788,46 +798,22 @@ function updateGroundHazards(dt) {
   }
 }
 
-// ---------- Level 2's chirping birds ----------
-// Each bird (perched in a tree, rendered with dogImg as a placeholder —
-// see draw()) counts down its own randomized timer. When it hits zero,
-// the bird chirps: the sound plays, and if the player is currently in
-// the same stage as that tree, the player's controls lock and they
-// freeze in place for FREEZE_DURATION seconds (see freezePlayer()).
-// Birds outside the player's current stage still chirp on their own
-// clock (so returning to that stage doesn't feel newly-reset) but don't
-// affect the player until they're actually nearby.
-const FREEZE_DURATION = 1.5;
-const CHIRP_FLASH_DURATION = 0.5; // how long the "♪" indicator shows above a chirping bird
-
-function randomChirpDelay(bird) {
-  const min = bird.chirpMin !== undefined ? bird.chirpMin : 4;
-  const max = bird.chirpMax !== undefined ? bird.chirpMax : 8;
-  return min + Math.random() * (max - min);
-}
-
-function freezePlayer(duration) {
-  player.frozen = true;
-  player.freezeTimer = duration;
-  player.vx = 0;
-  player.vy = 0;
+// ---------- Birds (Level 2) ----------
+// Each bird chirps at its own random interval. When one chirps, it plays
+// the chirp sound and locks the player's controls (freezeTimer) for
+// BIRD_FREEZE_DURATION seconds — doesn't hurt/kill the player, just
+// interrupts them, the way an involuntary tic would.
+function randomBirdInterval() {
+  return 3 + Math.random() * 4; // next chirp in 3–7s
 }
 
 function updateBirds(dt) {
-  for (const b of world.birds || []) {
-    if (b.chirpFlashTimer > 0) b.chirpFlashTimer -= dt;
-
+  for (const b of world.birdState || []) {
     b.chirpTimer -= dt;
     if (b.chirpTimer <= 0) {
-      b.chirpTimer = randomChirpDelay(b);
-      b.chirpFlashTimer = CHIRP_FLASH_DURATION;
-
-      const sameStage =
-        getSectionIndexForX(b.x) === getSectionIndexForX(player.x);
-      if (sameStage) {
-        playBirdChirpSound();
-        freezePlayer(FREEZE_DURATION);
-      }
+      playBirdChirpSound();
+      freezeTimer = BIRD_FREEZE_DURATION;
+      b.chirpTimer = randomBirdInterval();
     }
   }
 }
@@ -856,6 +842,13 @@ function updateTraps(dt) {
 //   speed: 190,               // px/s the gap expands (tune this for difficulty)
 // }
 function initGapExpansion() {
+  // This mechanic is specific to Level 1 / Stage 4 (section index 3 of
+  // that level's map) — other levels don't have this gap-seed trap.
+  if (WORLD.levelIndex !== 0) {
+    world.gapExpansion = null;
+    return;
+  }
+
   // Section 4 is the old Level 4. Its gap-seed trap lives at
   // (section start + 380) in world space; maxWidth is tuned so the gap
   // stops well short of that section's mailbox.
@@ -916,29 +909,28 @@ function isHazardVisible(hz) {
 function update(dt) {
   if (!player.alive) return;
 
-  updateBirds(dt);
-
-  if (player.frozen) {
-    // Controls locked, all motion frozen — this runs instead of the
-    // normal update while a bird chirp has the player caught out.
-    player.freezeTimer -= dt;
-    if (player.freezeTimer <= 0) {
-      player.frozen = false;
-    }
-    updateLevelLabel();
-    camera.x = clampCamera(player.x + player.w / 2);
-    return;
-  }
+  if (freezeTimer > 0) freezeTimer -= dt;
+  const isFrozen = freezeTimer > 0;
 
   updateMovingPlatforms(dt);
   updateGroundHazards(dt);
   updateTraps(dt);
   updateGapExpansion(dt);
+  updateBirds(dt);
 
   // horizontal input
   // Normal levels use instant velocity for responsive controls.
   // Level 3 has a slippery feel: smooth velocity changes both on ground and in the air.
-  const targetVx = keys.left ? -MOVE_SPEED : keys.right ? MOVE_SPEED : 0;
+  // While frozen (a bird just chirped — Level 2), all movement input is
+  // ignored and the player holds still, same as a real involuntary tic
+  // interrupting whatever they were doing.
+  const targetVx = isFrozen
+    ? 0
+    : keys.left
+      ? -MOVE_SPEED
+      : keys.right
+        ? MOVE_SPEED
+        : 0;
   if (getSectionIndexForX(player.x) === 2 && player.grounded) {
     // smaller accel => more slippery on ground only
     const slipAccel = 1.0;
@@ -953,7 +945,7 @@ function update(dt) {
   }
 
   // jump
-  if (keys.up && player.grounded) {
+  if (keys.up && player.grounded && !isFrozen) {
     player.vy = JUMP_VELOCITY;
     player.grounded = false;
     playJumpSound();
@@ -1150,7 +1142,16 @@ function activateCheckpoint(mb) {
 
   Progress.completeStage(mb.levelIndex, mb.stageIndex);
 
-  const isLastStageOfLevel = mb.stageIndex === STAGES_PER_LEVEL - 1;
+  // "Last stage of the level" means the last stage that's actually been
+  // built so far (WORLD_DEFS[levelIndex].stageCount), not necessarily the
+  // full STAGES_PER_LEVEL — e.g. Level 2 currently only has L2-1 built, so
+  // clearing it should send the player back to Level Select just like
+  // clearing L1-5 does, rather than leaving them stranded with nothing
+  // further to do on that map. For Level 1 these are the same number (5),
+  // so its behavior is unchanged.
+  const levelDef = WORLD_DEFS[mb.levelIndex];
+  const builtStageCount = levelDef ? levelDef.stageCount : STAGES_PER_LEVEL;
+  const isLastStageOfLevel = mb.stageIndex === builtStageCount - 1;
   const isLastLevel = mb.levelIndex === LEVEL_COUNT - 1;
 
   if (isLastStageOfLevel && isLastLevel) {
@@ -1192,7 +1193,15 @@ function draw() {
   // and naturally pans/cycles under the player as the camera scrolls
   // across each checkpoint, instead of sitting fixed to the screen.
   if (levelBgLoaded) {
-    ctx.drawImage(levelBgImg, 0, 0, world.def.width, VIEW_H);
+    // Crop (not stretch) BG.png so it's reused at native scale — matters
+    // now that not every level's map is the same width as the original
+    // 6400px-wide Level 1 map (e.g. Level 2's map is narrower). Tiles the
+    // image if a level's map is ever wider than one copy of BG.png.
+    const bgW = levelBgImg.naturalWidth || world.def.width;
+    for (let tx = 0; tx < world.def.width; tx += bgW) {
+      const drawW = Math.min(bgW, world.def.width - tx);
+      ctx.drawImage(levelBgImg, 0, 0, drawW, VIEW_H, tx, 0, drawW, VIEW_H);
+    }
   } else {
     ctx.fillStyle = "#d0d0d0";
     ctx.fillRect(0, 0, world.def.width, VIEW_H);
@@ -1203,6 +1212,29 @@ function draw() {
   ctx.fillStyle = "rgba(191, 191, 191, 0)";
   for (const g of world.def.ground) {
     ctx.fillRect(g.x, world.def.groundY, g.width, VIEW_H);
+  }
+
+  // decorative trees (Level 2's evenly-spaced tree.png) — purely visual,
+  // no collision, so they're drawn early as background scenery.
+  for (const tr of world.def.trees || []) {
+    const ty = world.def.groundY - tr.height;
+    if (treeLoaded) {
+      ctx.drawImage(treeImg, tr.x, ty, tr.width, tr.height);
+    } else {
+      ctx.fillStyle = "#4d7a48";
+      ctx.fillRect(tr.x, ty, tr.width, tr.height);
+    }
+  }
+
+  // birds perched in the trees (dog.png reused as a placeholder sprite —
+  // mechanically these are birds, not hazards; see updateBirds()).
+  for (const b of world.birdState || []) {
+    if (dogLoaded) {
+      ctx.drawImage(dogImg, b.x, b.y, b.width, b.height);
+    } else {
+      ctx.fillStyle = "#8a5a3a";
+      ctx.fillRect(b.x, b.y, b.width, b.height);
+    }
   }
 
   for (const t of world.trapState) {
@@ -1218,48 +1250,6 @@ function draw() {
       const shake = Math.sin(gameTime * 60) * 2;
       ctx.fillStyle = "rgba(0,0,0,0.15)";
       ctx.fillRect(t.x + shake, world.def.groundY, t.width, 6);
-    }
-  }
-
-  // Level 2's decorative trees (L2-1, L2-2) — pure background art, no
-  // collision. Drawn from tree.png; height is derived from each tree's
-  // `width` using the source image's aspect ratio so it's never stretched.
-  for (const tr of world.def.trees || []) {
-    const drawW = tr.width;
-    const drawH = drawW * TREE_ASPECT;
-    const drawX = tr.x - drawW / 2;
-    const drawY = world.def.groundY - drawH;
-    if (treeLoaded) {
-      ctx.drawImage(treeImg, drawX, drawY, drawW, drawH);
-    } else {
-      ctx.fillStyle = "#4d7a48";
-      ctx.fillRect(drawX, drawY, drawW, drawH);
-    }
-  }
-
-  // Birds perched in Level 2's trees — placeholder sprite (dogImg, no
-  // bird art yet), scaled well down and perched near the top of the
-  // canopy. A small "♪" pops up above a bird while it's mid-chirp.
-  for (const b of world.birds || []) {
-    const treeW = b.treeWidth !== undefined ? b.treeWidth : 240;
-    const treeDrawH = treeW * TREE_ASPECT;
-    const treeTop = world.def.groundY - treeDrawH;
-    const bx = b.x - BIRD_W / 2;
-    const by = treeTop + treeDrawH * 0.22;
-
-    if (dogLoaded) {
-      ctx.drawImage(dogImg, bx, by, BIRD_W, BIRD_H);
-    } else {
-      ctx.fillStyle = "#8a5a2a";
-      ctx.fillRect(bx, by, BIRD_W, BIRD_H);
-    }
-
-    if (b.chirpFlashTimer > 0) {
-      ctx.fillStyle = "#fff2c2";
-      ctx.font = "bold 20px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("♪", b.x, by - 8);
-      ctx.textAlign = "left";
     }
   }
 
@@ -1361,6 +1351,12 @@ function draw() {
     drawPlayer();
   }
 
+  // brief visual cue while a bird chirp has the player's controls locked
+  if (freezeTimer > 0) {
+    ctx.fillStyle = "rgba(120, 180, 255, 0.35)";
+    ctx.fillRect(player.x - 4, player.y - 4, player.w + 8, player.h + 8);
+  }
+
   ctx.restore();
 }
 
@@ -1419,15 +1415,6 @@ function drawPlayer() {
     drawW,
     drawH,
   );
-
-  // Frozen (bird-chirk lock, Level 2): a light, pulsing cyan tint over
-  // the player so the freeze reads clearly instead of just "input not
-  // responding".
-  if (player.frozen) {
-    const pulse = 0.25 + 0.15 * Math.sin(gameTime * 10);
-    ctx.fillStyle = `rgba(150, 220, 255, ${pulse})`;
-    ctx.fillRect(drawX, drawY, drawW, drawH);
-  }
 }
 
 // ------------------------------------------------------------

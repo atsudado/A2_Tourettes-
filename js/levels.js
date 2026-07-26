@@ -260,80 +260,7 @@ const LEVEL_1_STAGES = [
     ],
   },
 ];
-// ============================================================
-// LEVEL 2 — only stages 1 and 2 (L2-1, L2-2) are built so far, per
-// spec: do not touch L1-1..5, and don't build L2-3/4/5 yet.
-//
-// New mechanic this level: birds perched in trees (using dog.png as a
-// placeholder sprite — no bird art yet) that chirp at random. A chirp
-// locks the player's controls and freezes them in place for 1.5s (see
-// updateBirds()/freezePlayer() in main.js). Trees are pure background
-// decoration (tree.png, no collision) with 3 evenly spaced per stage.
-// ============================================================
-const LEVEL_2_STAGES = [
-  {
-    title: "Stage 1 — Vocal Tics",
-    intro:
-      "Not every tic is a movement.\n" +
-      "Sometimes it's a sound — sudden, involuntary, out of nowhere.\n" +
-      "When you hear it, you won't be able to do anything but wait it out.",
-    width: 1280,
-    groundY: 550,
-    spawn: { x: 80, y: 450 },
-    door: { x: 1150, width: 56, height: 90 },
-    ground: [{ x: 0, width: 1280 }],
-    trapGround: [],
-    movingPlatforms: [],
-    hazards: [],
-    // 3 trees evenly spaced across the 1280-wide stage (quarter marks:
-    // 320 / 640 / 960), each with one bird perched near the top of the
-    // canopy.
-    trees: [
-      { x: 320, width: 240 },
-      { x: 640, width: 240 },
-      { x: 960, width: 240 },
-    ],
-    birds: [
-      { x: 320, treeWidth: 240 },
-      { x: 640, treeWidth: 240 },
-      { x: 960, treeWidth: 240 },
-    ],
-  },
-
-  {
-    title: "Stage 2 — Vocal Tics (Continued)",
-    intro:
-      "The sounds keep coming, closer together now.\n" +
-      "You'll get used to freezing mid-stride — you don't have a choice.",
-    width: 1280,
-    groundY: 550,
-    spawn: { x: 80, y: 450 },
-    door: { x: 1150, width: 56, height: 90 },
-    ground: [{ x: 0, width: 1280 }],
-    trapGround: [],
-    movingPlatforms: [],
-    hazards: [],
-    trees: [
-      { x: 320, width: 240 },
-      { x: 640, width: 240 },
-      { x: 960, width: 240 },
-    ],
-    // Same layout as Stage 1, but each bird chirps on a shorter average
-    // cycle (see chirpMin/chirpMax) so the stage feels a notch harder.
-    birds: [
-      { x: 320, treeWidth: 240, chirpMin: 3, chirpMax: 6 },
-      { x: 640, treeWidth: 240, chirpMin: 3, chirpMax: 6 },
-      { x: 960, treeWidth: 240, chirpMin: 3, chirpMax: 6 },
-    ],
-  },
-];
-
-// Builds the one continuous map out of one or more levels' worth of
-// stages, each group keeping its own levelIndex but all sharing a single
-// running offsetX — so the whole game (all built levels back to back)
-// stays one seamless map, exactly like the original single-level
-// buildWorld did. Pass groups in play order: [{levelIndex, stages}, ...].
-function buildWorld(levelGroups) {
+function buildWorld(stages, levelIndex = 0) {
   const sections = [];
   const ground = [];
   const trapGround = [];
@@ -342,80 +269,84 @@ function buildWorld(levelGroups) {
   const groundHazards = [];
   const blocks = [];
   const mailboxes = [];
+  // Decorative trees + the birds perched on them (Level 2 onward). Kept as
+  // their own arrays, offset the same way as everything else above, so a
+  // stage just lists them in local coordinates and buildWorld() places them
+  // correctly in the level's world space.
   const trees = [];
   const birds = [];
-  const builtLevelIndices = [];
 
   let offsetX = 0;
 
-  for (const { levelIndex, stages } of levelGroups) {
-    builtLevelIndices.push(levelIndex);
+  stages.forEach((def, i) => {
+    const startX = offsetX;
+    const endX = startX + def.width;
 
-    stages.forEach((def, i) => {
-      const startX = offsetX;
-      const endX = startX + def.width;
-
-      sections.push({
-        index: sections.length, // position within the continuous map (used by getSectionIndexForX)
-        levelIndex,
-        stageIndex: i,
-        title: def.title,
-        intro: def.intro,
-        startX,
-        endX,
-        spawn: { x: startX + def.spawn.x, y: def.spawn.y },
-        // Preserve each stage's own "how far can you fall before you die"
-        // rule (Level 5's tall vertical climb needed a much lower limit
-        // than the default).
-        fallLimit:
-          def.fallLimit !== undefined ? def.fallLimit : def.groundY + 300,
-      });
-
-      for (const g of def.ground) {
-        ground.push({ x: startX + g.x, width: g.width });
-      }
-      for (const t of def.trapGround) {
-        trapGround.push({ ...t, x: startX + t.x });
-      }
-      for (const p of def.movingPlatforms) {
-        movingPlatforms.push({ ...p, x: startX + p.x });
-      }
-      for (const hz of def.hazards) {
-        hazards.push({ ...hz, x: startX + hz.x });
-      }
-      for (const gh of def.groundHazards || []) {
-        groundHazards.push({ ...gh, x: startX + gh.x });
-      }
-      for (const b of def.blocks || []) {
-        blocks.push({ ...b, x: startX + b.x });
-      }
-      for (const tr of def.trees || []) {
-        trees.push({ ...tr, x: startX + tr.x });
-      }
-      for (const bd of def.birds || []) {
-        birds.push({ ...bd, x: startX + bd.x });
-      }
-
-      const d = def.door;
-      mailboxes.push({
-        x: startX + d.x,
-        y: d.y, // undefined => sits on the shared ground line
-        width: d.width,
-        height: d.height,
-        levelIndex,
-        stageIndex: i,
-        activated: false,
-      });
-
-      offsetX = endX;
+    sections.push({
+      index: i, // position within the continuous map (used by getSectionIndexForX)
+      levelIndex,
+      stageIndex: i,
+      title: def.title,
+      intro: def.intro,
+      startX,
+      endX,
+      spawn: { x: startX + def.spawn.x, y: def.spawn.y },
+      // Preserve each stage's own "how far can you fall before you die"
+      // rule (Level 5's tall vertical climb needed a much lower limit
+      // than the default).
+      fallLimit:
+        def.fallLimit !== undefined ? def.fallLimit : def.groundY + 300,
     });
-  }
+
+    for (const g of def.ground) {
+      ground.push({ x: startX + g.x, width: g.width });
+    }
+    for (const t of def.trapGround) {
+      trapGround.push({ ...t, x: startX + t.x });
+    }
+    for (const p of def.movingPlatforms) {
+      movingPlatforms.push({ ...p, x: startX + p.x });
+    }
+    for (const hz of def.hazards) {
+      hazards.push({ ...hz, x: startX + hz.x });
+    }
+    for (const gh of def.groundHazards || []) {
+      groundHazards.push({ ...gh, x: startX + gh.x });
+    }
+    for (const b of def.blocks || []) {
+      blocks.push({ ...b, x: startX + b.x });
+    }
+    for (const tr of def.trees || []) {
+      trees.push({ ...tr, x: startX + tr.x });
+    }
+    for (const b of def.birds || []) {
+      birds.push({ ...b, x: startX + b.x });
+    }
+
+    const d = def.door;
+    mailboxes.push({
+      x: startX + d.x,
+      y: d.y, // undefined => sits on the shared ground line
+      width: d.width,
+      height: d.height,
+      levelIndex,
+      stageIndex: i,
+      activated: false,
+    });
+
+    offsetX = endX;
+  });
 
   return {
     width: offsetX,
     groundY: 550,
     spawn: { x: sections[0].spawn.x, y: sections[0].spawn.y },
-    builtLevelIndices,
+    levelIndex,
+    // How many stages of this level actually have content — used by the
+    // level-select grid to decide what's clickable vs. permanently greyed
+    // out, independent of what Progress has (pre-)unlocked.
+    stageCount: stages.length,
+    builtLevelIndices: [levelIndex],
     sections,
     ground,
     trapGround,
@@ -429,7 +360,98 @@ function buildWorld(levelGroups) {
   };
 }
 
-const WORLD = buildWorld([
-  { levelIndex: 0, stages: LEVEL_1_STAGES },
-  { levelIndex: 1, stages: LEVEL_2_STAGES },
-]);
+// ============================================================
+// LEVEL 2 — a brand new world, NOT a continuation of Level 1's map.
+// Only L2-1 exists so far; the other 4 stage slots for this level stay
+// locked in the level-select grid until they're built (see stageCount
+// above / the "built" check in level-select.js).
+//
+// Reuses BG.png as its backdrop (per the ask — dedicated Level 2 art
+// isn't ready yet) and tree.png for three evenly-spaced decorative
+// trees. Each tree has a bird perched in it; bird art isn't ready
+// either, so these reuse dog.png as a placeholder sprite (see
+// birdOnTree() below / main.js's drawing code) — mechanically they're birds,
+// not hazards: touching one doesn't hurt the player, but they
+// occasionally chirp (env_bird_mushikui_2.mp3) and briefly freeze the
+// player's controls when they do (see updateBirds() in main.js).
+// ============================================================
+
+// tree.png is 779x1177 natively (~1.51 aspect); dog.png (reused for the
+// birds) is drawn small here, at roughly its own native ~1.41 aspect.
+const TREE_DRAW_W = 200;
+const TREE_DRAW_H = 302;
+const BIRD_DRAW_W = 42;
+const BIRD_DRAW_H = 30;
+// How far down from the top of a tree's canopy a perched bird sits.
+const BIRD_PERCH_OFFSET_Y = 60;
+const LEVEL_2_GROUND_Y = 550;
+
+// Places a bird centered horizontally in the tree at `treeX`, perched
+// near the top of its canopy. Keeps the tree/bird math in one place so
+// the three trees below don't each hand-roll the same arithmetic.
+function birdOnTree(treeX, id) {
+  return {
+    id,
+    x: treeX + TREE_DRAW_W / 2 - BIRD_DRAW_W / 2,
+    width: BIRD_DRAW_W,
+    height: BIRD_DRAW_H,
+    y: LEVEL_2_GROUND_Y - TREE_DRAW_H + BIRD_PERCH_OFFSET_Y,
+    sprite: "dog", // placeholder — dog.png reused until bird art exists
+  };
+}
+
+const LEVEL_2_STAGES = [
+  {
+    title: "Stage 1 — A New Path",
+    intro:
+      "The road behind you is gone; there's no walking back to it now.\n" +
+      "Ahead is somewhere new — quiet, green, and watching.\n" +
+      "Listen closely. Not everything here stays still.",
+    width: 1400,
+    groundY: LEVEL_2_GROUND_Y,
+    spawn: { x: 80, y: 450 },
+    door: { x: 1300, width: 56, height: 90 },
+    ground: [{ x: 0, width: 1400 }],
+    trapGround: [],
+    movingPlatforms: [],
+    hazards: [],
+    groundHazards: [],
+    blocks: [],
+    // Three trees, evenly spaced across the stage.
+    trees: [
+      { x: 260, width: TREE_DRAW_W, height: TREE_DRAW_H },
+      { x: 680, width: TREE_DRAW_W, height: TREE_DRAW_H },
+      { x: 1100, width: TREE_DRAW_W, height: TREE_DRAW_H },
+    ],
+    // One bird per tree.
+    birds: [
+      birdOnTree(260, "bird-1"),
+      birdOnTree(680, "bird-2"),
+      birdOnTree(1100, "bird-3"),
+    ],
+  },
+];
+
+// ---------- The active-world registry ----------
+// Each level gets its own independent, self-contained map (its own width,
+// ground, sections, mailboxes...) instead of everything sharing one giant
+// continuous x-space. `WORLD` always points at whichever level is
+// currently loaded; main.js reassigns it (via setActiveLevel(), called
+// from loadWorld()) whenever the player starts a stage in a different
+// level, so every existing `WORLD.*` reference elsewhere in the engine
+// keeps working unchanged no matter which level is active. Because each
+// level's map is its own separate object with its own width/ground, there
+// is no shared coordinate space linking them — so, e.g., walking to the
+// right edge of Level 2 can't lead back into Level 1.
+const WORLD_DEFS = {
+  0: buildWorld(LEVEL_1_STAGES, 0),
+  1: buildWorld(LEVEL_2_STAGES, 1),
+};
+
+let WORLD = WORLD_DEFS[0];
+
+function setActiveLevel(levelIndex) {
+  const def = WORLD_DEFS[levelIndex];
+  if (def) WORLD = def;
+  return WORLD;
+}
