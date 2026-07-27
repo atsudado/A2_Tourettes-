@@ -69,7 +69,15 @@ function buildWorld(stages, levelIndex = 0) {
     });
 
     for (const g of def.ground) {
-      ground.push({ x: startX + g.x, width: g.width });
+      // `surface` is optional per ground segment ("gravel" so far — see
+      // Level 2 / Stage 3); defaults to the plain/dirt look + no footstep
+      // sound when a stage doesn't specify one, so every earlier stage's
+      // ground data keeps working unchanged.
+      ground.push({
+        x: startX + g.x,
+        width: g.width,
+        surface: g.surface || "dirt",
+      });
     }
     for (const t of def.trapGround) {
       trapGround.push({ ...t, x: startX + t.x });

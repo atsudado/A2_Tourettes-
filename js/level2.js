@@ -1,5 +1,5 @@
 // ============================================================
-// LEVEL 2 DATA — currently just L2-1 and L2-2 (L2-3 through L2-5
+// LEVEL 2 DATA — currently L2-1 through L2-3 (L2-4 and L2-5
 // stay locked in level-select until they're built).
 // This file only defines LEVEL_2_STAGES (pure data, plus its own
 // small tree/bird layout helpers). The shared engine logic that
@@ -9,9 +9,9 @@
 // ============================================================
 // ============================================================
 // LEVEL 2 — a brand new world, NOT a continuation of Level 1's map.
-// Only L2-1 exists so far; the other 4 stage slots for this level stay
-// locked in the level-select grid until they're built (see stageCount
-// above / the "built" check in level-select.js).
+// L2-1 through L2-3 exist so far; the other 2 stage slots for this level
+// stay locked in the level-select grid until they're built (see
+// stageCount above / the "built" check in level-select.js).
 //
 // Reuses BG.png as its backdrop (per the ask — dedicated Level 2 art
 // isn't ready yet) and tree.png for three evenly-spaced decorative
@@ -128,5 +128,32 @@ const LEVEL_2_STAGES = [
     // attach to; its mailbox spawns locked (see buildWorld() above) and
     // only opens once the correct code has been entered on the keypad.
     codeLock: true,
+  },
+
+  {
+    title: "Stage 3 — Underfoot",
+    intro:
+      "The path changes beneath your feet before you even see it.\n" +
+      "Every step here announces itself, loud and unavoidable.\n" +
+      "There's nowhere on this ground that walks quietly.",
+    width: 1400,
+    groundY: LEVEL_2_GROUND_Y,
+    spawn: { x: 80, y: 450 },
+    door: { x: 1300, width: 56, height: 90 },
+    // The whole stage floor is gravel — `surface: "gravel"` on a ground
+    // segment is what makes main.js draw the pebble texture over it (see
+    // draw()) and play the looping footstep sound while the player is
+    // grounded and moving across it (see updateFootstepSound()/the
+    // gravel-footstep block in update()). Plain `ground` entries elsewhere
+    // in this file default to `surface: "dirt"` via buildWorld() and stay
+    // silent underfoot, same as before.
+    ground: [{ x: 0, width: 1400, surface: "gravel" }],
+    trapGround: [],
+    movingPlatforms: [],
+    hazards: [],
+    groundHazards: [],
+    blocks: [],
+    trees: [],
+    birds: [],
   },
 ];

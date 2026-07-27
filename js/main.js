@@ -121,6 +121,12 @@ let birdChirpSound = null;
 // Level 2 / Stage 2's passing-car honk — placeholder audio file path,
 // same "safe to swap later" treatment as the sprites above.
 let carHonkSound = null;
+// Level 2 / Stage 3's gravel footstep loop — looped while the player is
+// grounded, moving, and standing on a "gravel" ground segment (see the
+// gravel-footstep block in update() below). Unlike the one-shot sounds above, this one
+// is started/stopped rather than replayed from the top each call, so the
+// footstep loop keeps its own place instead of restarting every frame.
+let gravelFootstepsSound = null;
 let audioInitialized = false;
 
 function initAudio() {
@@ -157,6 +163,11 @@ function initAudio() {
   carHonkSound = new Audio("assets/sounds/car_honk.mp3");
   carHonkSound.volume = 0.5;
   carHonkSound.preload = "auto";
+
+  gravelFootstepsSound = new Audio("assets/sounds/gravel_footsteps.mp3");
+  gravelFootstepsSound.loop = true;
+  gravelFootstepsSound.volume = 0.5;
+  gravelFootstepsSound.preload = "auto";
 }
 
 function playSound(sound) {
@@ -230,6 +241,33 @@ function playBirdChirpSound() {
 function playCarHonkSound() {
   initAudio();
   playSound(carHonkSound);
+}
+
+// Starts/stops the gravel footstep loop. Deliberately NOT built on top of
+// playSound() — playSound() always rewinds to 0, which is right for a
+// one-shot cue (a jump, a bell) but would make a continuous walking loop
+// stutter back to its start every single frame it's called. Here we only
+// call .play() the moment the loop was actually paused, and .pause()
+// the moment it should stop, so the loop just keeps running/holding as
+// long as the player keeps walking on gravel.
+function startGravelFootsteps() {
+  if (!gravelFootstepsSound) return;
+  if (gravelFootstepsSound.paused) {
+    const playPromise = gravelFootstepsSound.play();
+    if (playPromise && typeof playPromise.catch === "function") {
+      playPromise.catch(() => {
+        // autoplay blocked before any user gesture; the next real
+        // keydown/click will let update() try again naturally.
+      });
+    }
+  }
+}
+
+function stopGravelFootsteps() {
+  if (!gravelFootstepsSound) return;
+  if (!gravelFootstepsSound.paused) {
+    gravelFootstepsSound.pause();
+  }
 }
 
 function preloadSprite() {
@@ -967,6 +1005,7 @@ function setTitleBackground(active) {
 }
 
 function showStartOverlay() {
+  stopGravelFootsteps();
   playMenuMusic();
   setTitleBackground(true);
   overlayTitle.textContent = "TACTIC";
@@ -980,6 +1019,7 @@ function showStartOverlay() {
 }
 
 function showEndOverlay() {
+  stopGravelFootsteps();
   setTitleBackground(false);
 
   overlayTitle.textContent = "You made it!";
@@ -1070,6 +1110,7 @@ window.addEventListener("keydown", (e) => {
     if (!isPaused && overlay.classList.contains("hidden")) {
       // show pause menu
       isPaused = true;
+      stopGravelFootsteps();
       setTitleBackground(false);
       overlayTitle.textContent = "PAUSED";
       overlayBtn.textContent = "Restart From Checkpoint";
@@ -1127,7 +1168,12 @@ function getGroundSegmentsAt(x) {
   // Start with the defined ground segments, then subtract any fallen trap ranges
   const segs = [];
   for (const g of world.def.ground) {
-    segs.push({ left: g.x, right: g.x + g.width, top: world.def.groundY });
+    segs.push({
+      left: g.x,
+      right: g.x + g.width,
+      top: world.def.groundY,
+      surface: g.surface || "dirt",
+    });
   }
 
   for (const t of world.trapState) {
@@ -1145,6 +1191,7 @@ function getGroundSegmentsAt(x) {
           left: s.left,
           right: Math.min(t.x, s.right),
           top: s.top,
+          surface: s.surface,
         });
       }
       // right piece
@@ -1154,6 +1201,7 @@ function getGroundSegmentsAt(x) {
           left: Math.max(rightStart, s.left),
           right: s.right,
           top: s.top,
+          surface: s.surface,
         });
       }
     }
@@ -1203,6 +1251,7 @@ function triggerJumpTraps() {
 function killPlayer() {
   if (!player.alive) return;
   player.alive = false;
+  stopGravelFootsteps();
   deathFlashTimer = 0.5;
   setTimeout(() => {
     respawnPlayer();
@@ -1520,6 +1569,12 @@ function update(dt) {
 
   // ---- collisions: ground segments ----
   player.grounded = false;
+  // Which ground segment (if any) the player actually landed/settled on
+  // this frame — used below to tell gravel underfoot from anything else
+  // so the footstep loop only plays over gravel (see the gravel-footstep
+  // block in update() and Level 2 / Stage 3's `surface: "gravel"` ground
+  // segments).
+  let standingSurface = null;
   const feetY = player.y + player.h;
   const segs = getGroundSegmentsAt(player.x);
   for (const seg of segs) {
@@ -1533,6 +1588,7 @@ function update(dt) {
       player.y = seg.top - player.h;
       player.vy = 0;
       player.grounded = true;
+      standingSurface = seg.surface || null;
     }
   }
 
@@ -1554,6 +1610,19 @@ function update(dt) {
       player.x += px - (p.lastX !== undefined ? p.lastX : px);
     }
     p.lastX = px;
+  }
+
+  // ---- gravel footstep sound (Level 2 / Stage 3) ----
+  // Plays only while the player is actually grounded on a "gravel" ground
+  // segment AND moving — holding still on gravel, or being airborne over
+  // it, stays silent. Landing on a moving platform overrides
+  // standingSurface back to null above, so mid-air/platform sections of a
+  // gravel stage don't keep the loop going either.
+  const isMovingOnGround = player.grounded && Math.abs(player.vx) > 5;
+  if (isMovingOnGround && standingSurface === "gravel") {
+    startGravelFootsteps();
+  } else {
+    stopGravelFootsteps();
   }
 
   // ---- hazards (flashing tic blocks) ----
@@ -1760,6 +1829,39 @@ function draw() {
   ctx.fillStyle = "rgba(191, 191, 191, 0)";
   for (const g of world.def.ground) {
     ctx.fillRect(g.x, world.def.groundY, g.width, VIEW_H);
+  }
+
+  // gravel ground (Level 2 / Stage 3) — a band of scattered pebbles right
+  // at the surface so gravel patches read as a distinct, walkable texture
+  // instead of just plain ground. Pebble positions are derived from each
+  // segment's own x/width (not random per frame), so the texture stays put
+  // instead of shimmering as the camera pans.
+  ctx.fillStyle = "#8a8378";
+  for (const g of world.def.ground) {
+    if (g.surface !== "gravel") continue;
+    const bandTop = world.def.groundY;
+    const bandHeight = 10;
+    ctx.fillRect(g.x, bandTop, g.width, bandHeight);
+    const pebbleSpacing = 14;
+    const count = Math.floor(g.width / pebbleSpacing);
+    for (let i = 0; i < count; i++) {
+      // Deterministic pseudo-scatter from the pebble's own index/position
+      // (no Math.random()) so the same segment always draws identically.
+      const seed = g.x + i * pebbleSpacing;
+      const jitterY = (seed % 5) - 2;
+      const jitterX = ((seed * 7) % 6) - 3;
+      const r = 1.5 + ((seed * 3) % 3) * 0.5;
+      ctx.beginPath();
+      ctx.arc(
+        g.x + i * pebbleSpacing + jitterX,
+        bandTop + bandHeight / 2 + jitterY,
+        r,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fillStyle = i % 2 === 0 ? "#6f685d" : "#a49b8c";
+      ctx.fill();
+    }
   }
 
   // decorative trees (Level 2's evenly-spaced tree.png) — purely visual,
