@@ -36,6 +36,17 @@ let isPaused = false;
 let freezeTimer = 0;
 const BIRD_FREEZE_DURATION = 1.5;
 
+// ---- noise meter (Level 2 / Stage 3's gravel) ----
+// Fills while the player walks on gravel without sneaking (see the
+// gravel-footstep block in update()); drains while quiet (standing still,
+// sneaking with "H", or on any other surface). Reaching NOISE_MAX kills the
+// player, same as any other hazard. Only ever shown/ticked on that one
+// stage — see the `onGravelStage` checks in update()/draw() below.
+let noiseLevel = 0;
+const NOISE_MAX = 100;
+const NOISE_RATE_UP = 38; // meter units/sec while noisy
+const NOISE_RATE_DOWN = 22; // meter units/sec while quiet
+
 const overlay = document.getElementById("overlay");
 const overlayTitle = document.getElementById("overlay-title");
 const overlayText = document.getElementById("overlay-text");
@@ -842,6 +853,7 @@ function loadWorld(levelIndex = 0, spawnOverride = null) {
   keys.left = keys.right = keys.up = keys.slow = false;
   isPaused = false;
   freezeTimer = 0;
+  noiseLevel = 0;
   const menuBtn = document.getElementById("overlay-menu-btn");
   if (menuBtn) menuBtn.remove();
   hideKeypad();
@@ -871,6 +883,7 @@ function respawnPlayer() {
     chirpTimer: randomBirdInterval(),
   }));
   freezeTimer = 0;
+  noiseLevel = 0;
   hideKeypad();
 
   if (hazardSpawner !== null) {
@@ -1650,10 +1663,25 @@ function update(dt) {
   // sneaks: the player moves at SNEAK_SPEED and stays silent even while
   // walking across gravel.
   const isMovingOnGround = player.grounded && Math.abs(player.vx) > 5;
-  if (isMovingOnGround && standingSurface === "gravel" && !keys.slow) {
+  const isNoisy = isMovingOnGround && standingSurface === "gravel" && !keys.slow;
+  if (isNoisy) {
     startGravelFootsteps();
   } else {
     stopGravelFootsteps();
+  }
+
+  // ---- noise meter (Level 2 / Stage 3) ----
+  // Only ticks on that stage — the gravel-only `isNoisy` check above means
+  // this is a no-op everywhere else anyway, but the section check keeps it
+  // explicit and matches the `onGravelStage` pattern used for the HUD/hint.
+  const onGravelStage = WORLD.levelIndex === 1 && getSectionIndexForX(player.x) === 2;
+  if (onGravelStage) {
+    noiseLevel += (isNoisy ? NOISE_RATE_UP : -NOISE_RATE_DOWN) * dt;
+    noiseLevel = Math.max(0, Math.min(NOISE_MAX, noiseLevel));
+    if (noiseLevel >= NOISE_MAX) {
+      killPlayer();
+      return;
+    }
   }
 
   // ---- hazards (flashing tic blocks) ----
@@ -2054,6 +2082,44 @@ function draw() {
   }
 
   ctx.restore();
+
+  // ---- noise meter HUD (Level 2 / Stage 3 only) ----
+  // Drawn in screen space (after ctx.restore(), so it ignores the camera
+  // translate above) and only while the player is actually on that stage —
+  // every other stage/level never shows it.
+  const onGravelStageHud = world.def.levelIndex === 1 && getSectionIndexForX(player.x) === 2;
+  if (onGravelStageHud) {
+    const barW = 200;
+    const barH = 18;
+    const margin = 18;
+    const barX = VIEW_W - barW - margin;
+    const barY = margin;
+
+    // label
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 13px sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText("NOISE", barX + barW, barY - 6);
+    ctx.textAlign = "left";
+
+    // background/track
+    ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+    ctx.fillRect(barX - 3, barY - 3, barW + 6, barH + 6);
+    ctx.fillStyle = "#3a3a3a";
+    ctx.fillRect(barX, barY, barW, barH);
+
+    // fill — green when quiet, sliding to red as it fills up
+    const pct = Math.max(0, Math.min(1, noiseLevel / NOISE_MAX));
+    const fillW = barW * pct;
+    const hue = 120 - pct * 120; // 120 (green) -> 0 (red)
+    ctx.fillStyle = `hsl(${hue}, 85%, 50%)`;
+    ctx.fillRect(barX, barY, fillW, barH);
+
+    // border
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(barX, barY, barW, barH);
+  }
 }
 
 function drawPlayer() {
