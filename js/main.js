@@ -2092,7 +2092,7 @@ function draw() {
     const barW = 200;
     const barH = 18;
     const margin = 18;
-    const barX = VIEW_W - barW - margin;
+    const barX = VIEW_W - barW - margin - 50;
     const barY = margin;
 
     // label
