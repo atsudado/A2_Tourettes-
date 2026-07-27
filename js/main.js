@@ -12,6 +12,9 @@ const VIEW_H = 720;
 const GRAVITY = 1800; // px/s^2
 const JUMP_VELOCITY = -680; // px/s
 const MOVE_SPEED = 320; // px/s
+// Sneak speed: held with "H" to move quietly (see Level 2 / Stage 3's gravel
+// footstep sound). Slower than normal walking — the tradeoff for silence.
+const SNEAK_SPEED = 140; // px/s
 const FRICTION_GROUND = 0.0; // (instant accel model, kept for tuning)
 const PLAYER_W = 28;
 const PLAYER_H = 64;
@@ -22,7 +25,7 @@ let world = null; // the one continuous map (mutable runtime state)
 let checkpoint = { x: 0, y: 0 }; // latest activated mailbox (or the world start)
 let player = null;
 let camera = { x: 0 };
-let keys = { left: false, right: false, up: false };
+let keys = { left: false, right: false, up: false, slow: false };
 let lastTime = null;
 let gameTime = 0;
 let deathFlashTimer = 0;
@@ -38,6 +41,14 @@ const overlayTitle = document.getElementById("overlay-title");
 const overlayText = document.getElementById("overlay-text");
 const overlayBtn = document.getElementById("overlay-btn");
 const levelLabel = document.getElementById("level-label");
+const controlsHint = document.getElementById("controls-hint");
+const DEFAULT_CONTROLS_HINT =
+  "← → move &nbsp;|&nbsp; ↑ / Space jump &nbsp;|&nbsp; Esc menu";
+// Level 2 / Stage 3's gravel: mention the sneak key only while the player
+// is actually on that stage, so the hint elsewhere doesn't reference a
+// mechanic that doesn't apply there.
+const GRAVEL_CONTROLS_HINT =
+  "← → move &nbsp;|&nbsp; ↑ / Space jump &nbsp;|&nbsp; Hold H to sneak &nbsp;|&nbsp; Esc menu";
 const restartBtn = document.getElementById("restart-btn");
 
 const BOX_SRC = "assets/images/box.png";
@@ -828,7 +839,7 @@ function loadWorld(levelIndex = 0, spawnOverride = null) {
   updateLevelLabel();
 
   // ensure input state is reset and clear pause/freeze state
-  keys.left = keys.right = keys.up = false;
+  keys.left = keys.right = keys.up = keys.slow = false;
   isPaused = false;
   freezeTimer = 0;
   const menuBtn = document.getElementById("overlay-menu-btn");
@@ -873,7 +884,7 @@ function respawnPlayer() {
 
   player = makePlayer(checkpoint);
   camera.x = clampCamera(player.x + player.w / 2);
-  keys.left = keys.right = keys.up = false;
+  keys.left = keys.right = keys.up = keys.slow = false;
 }
 
 // The old dynamic red-cube hazard from "Stage 1" — kept scoped to that
@@ -978,6 +989,15 @@ function getSectionIndexForX(x) {
 function updateLevelLabel() {
   const idx = getSectionIndexForX(player.x);
   levelLabel.textContent = WORLD.sections[idx].title.split("—")[0].trim();
+
+  // Swap in the sneak-key hint only on Level 2 / Stage 3 (the gravel
+  // stage); every other stage keeps the default control list.
+  if (controlsHint) {
+    const onGravelStage = WORLD.levelIndex === 1 && idx === 2;
+    controlsHint.innerHTML = onGravelStage
+      ? GRAVEL_CONTROLS_HINT
+      : DEFAULT_CONTROLS_HINT;
+  }
 }
 
 function clampCamera(targetX) {
@@ -1106,6 +1126,9 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "ArrowUp" || e.code === "Space" || e.code === "KeyW") {
     keys.up = true;
   }
+  // Hold "H" to sneak: slows the player down in exchange for moving
+  // silently over noisy surfaces (see Level 2 / Stage 3's gravel).
+  if (e.code === "KeyH") keys.slow = true;
   if (e.code === "Escape") {
     if (!isPaused && overlay.classList.contains("hidden")) {
       // show pause menu
@@ -1157,6 +1180,7 @@ window.addEventListener("keyup", (e) => {
   if (e.code === "ArrowUp" || e.code === "Space" || e.code === "KeyW") {
     keys.up = false;
   }
+  if (e.code === "KeyH") keys.slow = false;
 });
 
 // ------------------------------------------------------------
@@ -1478,12 +1502,17 @@ function update(dt) {
   // While frozen (a bird just chirped — Level 2), all movement input is
   // ignored and the player holds still, same as a real involuntary tic
   // interrupting whatever they were doing.
+  // Holding "H" sneaks: caps movement at SNEAK_SPEED instead of MOVE_SPEED.
+  // Slower everywhere (simple, predictable control), but its real payoff is
+  // on gravel (Level 2 / Stage 3), where sneaking also silences footsteps
+  // (see the gravel-footstep block below).
+  const currentMoveSpeed = keys.slow ? SNEAK_SPEED : MOVE_SPEED;
   const targetVx = isFrozen
     ? 0
     : keys.left
-      ? -MOVE_SPEED
+      ? -currentMoveSpeed
       : keys.right
-        ? MOVE_SPEED
+        ? currentMoveSpeed
         : 0;
   if (getSectionIndexForX(player.x) === 2 && player.grounded) {
     // smaller accel => more slippery on ground only
@@ -1617,9 +1646,11 @@ function update(dt) {
   // segment AND moving — holding still on gravel, or being airborne over
   // it, stays silent. Landing on a moving platform overrides
   // standingSurface back to null above, so mid-air/platform sections of a
-  // gravel stage don't keep the loop going either.
+  // gravel stage don't keep the loop going either. Holding "H" (keys.slow)
+  // sneaks: the player moves at SNEAK_SPEED and stays silent even while
+  // walking across gravel.
   const isMovingOnGround = player.grounded && Math.abs(player.vx) > 5;
-  if (isMovingOnGround && standingSurface === "gravel") {
+  if (isMovingOnGround && standingSurface === "gravel" && !keys.slow) {
     startGravelFootsteps();
   } else {
     stopGravelFootsteps();

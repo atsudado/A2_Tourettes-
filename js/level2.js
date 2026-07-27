@@ -135,7 +135,7 @@ const LEVEL_2_STAGES = [
     intro:
       "The path changes beneath your feet before you even see it.\n" +
       "Every step here announces itself, loud and unavoidable.\n" +
-      "There's nowhere on this ground that walks quietly.",
+      "Slow down — hold H — and even loud ground learns to stay quiet.",
     width: 1400,
     groundY: LEVEL_2_GROUND_Y,
     spawn: { x: 80, y: 450 },
