@@ -296,6 +296,23 @@ function buildWorld(stages, levelIndex = 0) {
       // than the default).
       fallLimit:
         def.fallLimit !== undefined ? def.fallLimit : def.groundY + 300,
+      // Level 2-2's "Drowned Out" code-lock puzzle (NPC + speech bubble
+      // + honking cars — see main.js's initCodeLock()/updateCarsAndNpc()).
+      // `npc`/`cars` are optional per-stage config objects; codeLock just
+      // flags which section (if any) currently owns the mechanic so it
+      // can be found generically instead of by hardcoded index.
+      npc: def.npc ? { ...def.npc, x: startX + def.npc.x } : null,
+      cars: def.cars
+        ? {
+            ...def.cars,
+            minX:
+              startX + (def.cars.minX !== undefined ? def.cars.minX : 0),
+            maxX:
+              startX +
+              (def.cars.maxX !== undefined ? def.cars.maxX : def.width),
+          }
+        : null,
+      codeLock: !!def.codeLock,
     });
 
     for (const g of def.ground) {
@@ -332,6 +349,10 @@ function buildWorld(stages, levelIndex = 0) {
       levelIndex,
       stageIndex: i,
       activated: false,
+      // Locked mailboxes (Level 2-2's code puzzle) don't complete the
+      // stage on touch until the right code has been entered — see the
+      // mailbox-collision handling in main.js's update().
+      locked: !!def.codeLock,
     });
 
     offsetX = endX;
@@ -429,6 +450,58 @@ const LEVEL_2_STAGES = [
       birdOnTree(680, "bird-2"),
       birdOnTree(1100, "bird-3"),
     ],
+  },
+
+  {
+    title: "Stage 2 — Drowned Out",
+    intro:
+      "Someone nearby is trying to tell you something important.\n" +
+      "But the noise keeps cutting in — sudden, loud, impossible to ignore.\n" +
+      "Listen closely. Piece it together, even through the interruptions.",
+    width: 1400,
+    groundY: LEVEL_2_GROUND_Y,
+    spawn: { x: 80, y: 450 },
+    door: { x: 1300, width: 56, height: 90 },
+    ground: [{ x: 0, width: 1400 }],
+    // Deliberately no trapGround/hazards/blocks here — the challenge in
+    // this stage is entirely about listening and remembering, not
+    // platforming, per the "no fast reactions required" accessibility
+    // goal. Flat, hazard-free ground the whole way across.
+    trapGround: [],
+    movingPlatforms: [],
+    hazards: [],
+    groundHazards: [],
+    blocks: [],
+    trees: [],
+    birds: [],
+
+    // The NPC who "speaks" the 4-digit code via a cycling speech bubble
+    // (see main.js's initCodeLock()/drawCarsAndNpc()). `width`/`height`
+    // size the placeholder sprite; swap NPC_PLACEHOLDER_SRC in main.js
+    // for the real art whenever it's ready — nothing here needs to change.
+    npc: { x: 650, width: 70, height: 96 },
+
+    // Background cars that periodically honk and stamp "BEEP" over part
+    // of the NPC's speech bubble. `minX`/`maxX` default to the full
+    // stage width when omitted; spelled out here for clarity.
+    cars: {
+      laneY: 500,
+      minX: 0,
+      maxX: 1400,
+      width: 70,
+      height: 34,
+      spawnIntervalMin: 1.6,
+      spawnIntervalMax: 3.2,
+      speedMin: 150,
+      speedMax: 240,
+      honkIntervalMin: 1.3,
+      honkIntervalMax: 2.8,
+    },
+
+    // Marks this as the section main.js's code-lock mechanic should
+    // attach to; its mailbox spawns locked (see buildWorld() above) and
+    // only opens once the correct code has been entered on the keypad.
+    codeLock: true,
   },
 ];
 

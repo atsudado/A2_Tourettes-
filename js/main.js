@@ -81,6 +81,21 @@ const treeImg = new Image();
 treeImg.src = TREE_SRC;
 let treeLoaded = false;
 
+// Level 2 / Stage 2's NPC and background cars — PLACEHOLDER ART.
+// Swap these two path strings (and drop the matching files into
+// assets/images/) to bring in the final sprites; nothing else needs to
+// change since every draw call below already falls back to a flat-color
+// rectangle if the image fails to load, same pattern as every other
+// sprite in the game.
+const NPC_PLACEHOLDER_SRC = "assets/images/npc_placeholder.png";
+const CAR_PLACEHOLDER_SRC = "assets/images/car_placeholder.png";
+const npcImg = new Image();
+npcImg.src = NPC_PLACEHOLDER_SRC;
+let npcLoaded = false;
+const carImg = new Image();
+carImg.src = CAR_PLACEHOLDER_SRC;
+let carLoaded = false;
+
 const SPRITE_SHEET_SRC = "assets/images/mailman.png";
 
 const SPRITE_FRAME_W = 117;
@@ -98,6 +113,9 @@ let buttonClickSound = null;
 let jumpSound = null;
 let mailboxBellSound = null;
 let birdChirpSound = null;
+// Level 2 / Stage 2's passing-car honk — placeholder audio file path,
+// same "safe to swap later" treatment as the sprites above.
+let carHonkSound = null;
 let audioInitialized = false;
 
 function initAudio() {
@@ -130,6 +148,10 @@ function initAudio() {
   birdChirpSound = new Audio("assets/sounds/bird_chirp.mp3");
   birdChirpSound.volume = 0.55;
   birdChirpSound.preload = "auto";
+
+  carHonkSound = new Audio("assets/sounds/car_honk.mp3");
+  carHonkSound.volume = 0.5;
+  carHonkSound.preload = "auto";
 }
 
 function playSound(sound) {
@@ -198,6 +220,11 @@ function playMailboxBellSound() {
 
 function playBirdChirpSound() {
   playSound(birdChirpSound);
+}
+
+function playCarHonkSound() {
+  initAudio();
+  playSound(carHonkSound);
 }
 
 function preloadSprite() {
@@ -273,6 +300,8 @@ function preloadAllAssets() {
     preloadImage(box2Img, BOX2_SRC, (ok) => (box2Loaded = ok)),
     preloadImage(whitedogImg, WHITEDOG_SRC, (ok) => (whitedogLoaded = ok)),
     preloadImage(treeImg, TREE_SRC, (ok) => (treeLoaded = ok)),
+    preloadImage(npcImg, NPC_PLACEHOLDER_SRC, (ok) => (npcLoaded = ok)),
+    preloadImage(carImg, CAR_PLACEHOLDER_SRC, (ok) => (carLoaded = ok)),
   ]);
 }
 
@@ -305,6 +334,414 @@ function freshTrapState() {
   }));
 }
 
+// ------------------------------------------------------------
+// Locked mailbox / code-entry keypad (Level 2-2 — "Drowned Out")
+//
+// A stage can mark one of its sections with `codeLock: true` and an
+// `npc`/`cars` config (see levels.js). When that's present:
+//  - its mailbox spawns locked (mb.locked = true) and won't complete the
+//    stage on touch until the right 4-digit code has been entered
+//  - an NPC in that section cycles a speech bubble containing a randomly
+//    generated 4-digit code
+//  - background cars drive by and occasionally honk, which stamps a
+//    "BEEP" over one or two of the bubble's digits for a moment
+//  - touching the locked mailbox opens an on-screen keypad; entering the
+//    correct code unlocks it so the next touch delivers the mail as
+//    normal (see the mailbox loop in update() and activateCheckpoint())
+//
+// Scoped the same way the Stage 1 dynamic hazard / Stage 4 gap-expansion
+// mechanics are (a lookup against the currently active WORLD.sections)
+// rather than a hardcoded level/stage index, so it keeps working
+// wherever a future `codeLock` section ends up.
+// ------------------------------------------------------------
+
+const NPC_BUBBLE_SHOW_DURATION = 3.6; // seconds the code bubble is visible
+const NPC_BUBBLE_HIDE_DURATION = 1.1; // brief pause between cycles
+const CAR_HONK_OBSCURE_DURATION = 1.0; // seconds a honked digit stays covered
+
+function generateRandomCode() {
+  const code = [];
+  for (let i = 0; i < 4; i++) {
+    code.push(String(Math.floor(Math.random() * 10)));
+  }
+  return code;
+}
+
+function findCodeLockSection() {
+  return WORLD.sections.find((s) => s.codeLock && s.npc);
+}
+
+// Full (re)init — called from loadWorld(). Generates a fresh code, since
+// this only happens when the player (re)starts the stage from scratch.
+function initCodeLock() {
+  const section = findCodeLockSection();
+  if (!section) {
+    world.codeLock = null;
+    return;
+  }
+
+  world.codeLock = {
+    section,
+    code: generateRandomCode(),
+    solved: false,
+    // NPC speech-cycle state
+    cyclePhase: "showing", // "showing" | "hidden"
+    cycleTimer: NPC_BUBBLE_SHOW_DURATION,
+    // per-digit seconds remaining obscured by a "BEEP" (0 = visible)
+    obscured: [0, 0, 0, 0],
+    // background cars
+    cars: [],
+    spawnTimer: 0.5 + Math.random() * 1.5,
+    honkTimer: 1 + Math.random() * 1.5,
+  };
+}
+
+// Lighter reset — called from respawnPlayer(). Intentionally preserves
+// `code` and `solved`: dying shouldn't erase progress the player has
+// already made on the puzzle (partially memorized digits, or an already
+// -unlocked mailbox), same spirit as checkpoints staying activated.
+function resetCodeLockRunState() {
+  if (!world.codeLock) return;
+  world.codeLock.cyclePhase = "showing";
+  world.codeLock.cycleTimer = NPC_BUBBLE_SHOW_DURATION;
+  world.codeLock.obscured = [0, 0, 0, 0];
+  world.codeLock.cars = [];
+  world.codeLock.spawnTimer = 0.5 + Math.random() * 1.5;
+  world.codeLock.honkTimer = 1 + Math.random() * 1.5;
+}
+
+function updateCarsAndNpc(dt) {
+  const cl = world.codeLock;
+  if (!cl) return;
+
+  // Speech-bubble show/hide cycle.
+  cl.cycleTimer -= dt;
+  if (cl.cycleTimer <= 0) {
+    if (cl.cyclePhase === "showing") {
+      cl.cyclePhase = "hidden";
+      cl.cycleTimer = NPC_BUBBLE_HIDE_DURATION;
+    } else {
+      cl.cyclePhase = "showing";
+      cl.cycleTimer = NPC_BUBBLE_SHOW_DURATION;
+      cl.obscured = [0, 0, 0, 0];
+    }
+  }
+
+  // Count down any digits currently covered by a "BEEP".
+  for (let i = 0; i < cl.obscured.length; i++) {
+    if (cl.obscured[i] > 0) cl.obscured[i] = Math.max(0, cl.obscured[i] - dt);
+  }
+
+  const carsCfg = cl.section.cars;
+  if (!carsCfg) return;
+
+  // Spawn cars.
+  cl.spawnTimer -= dt;
+  if (cl.spawnTimer <= 0) {
+    const dir = Math.random() < 0.5 ? 1 : -1;
+    const speedMin = carsCfg.speedMin || 150;
+    const speedMax = carsCfg.speedMax || 240;
+    const w = carsCfg.width || 70;
+    const h = carsCfg.height || 34;
+    cl.cars.push({
+      x: dir === 1 ? carsCfg.minX - w : carsCfg.maxX,
+      y: carsCfg.laneY,
+      width: w,
+      height: h,
+      speed: speedMin + Math.random() * (speedMax - speedMin),
+      dir,
+    });
+    const spawnMin = carsCfg.spawnIntervalMin || 1.5;
+    const spawnMax = carsCfg.spawnIntervalMax || 3;
+    cl.spawnTimer = spawnMin + Math.random() * (spawnMax - spawnMin);
+  }
+
+  // Move + cull cars that have driven off either edge of the stretch.
+  for (const car of cl.cars) {
+    car.x += car.dir * car.speed * dt;
+  }
+  cl.cars = cl.cars.filter(
+    (car) => car.x > carsCfg.minX - 200 && car.x < carsCfg.maxX + 200,
+  );
+
+  // Honks — only meaningful (and only obscure anything) while the bubble
+  // is actually showing; a honk with nothing on screen to cover is just
+  // a passing car.
+  cl.honkTimer -= dt;
+  if (cl.honkTimer <= 0) {
+    const honkMin = carsCfg.honkIntervalMin || 1.2;
+    const honkMax = carsCfg.honkIntervalMax || 2.6;
+    cl.honkTimer = honkMin + Math.random() * (honkMax - honkMin);
+
+    if (cl.cyclePhase === "showing" && cl.cars.length > 0) {
+      playCarHonkSound();
+      // Cover one digit most of the time, occasionally two — enough to
+      // genuinely slow the player down without ever hiding the whole
+      // code at once.
+      const numObscured = Math.random() < 0.55 ? 1 : 2;
+      const order = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
+      for (let i = 0; i < numObscured; i++) {
+        cl.obscured[order[i]] = CAR_HONK_OBSCURE_DURATION;
+      }
+    }
+  }
+}
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+function drawCarsAndNpc() {
+  const cl = world.codeLock;
+  if (!cl) return;
+
+  // Background cars.
+  for (const car of cl.cars) {
+    if (carLoaded) {
+      ctx.save();
+      if (car.dir === -1) {
+        // flip horizontally so the placeholder art faces its direction
+        // of travel
+        ctx.translate(car.x + car.width, car.y);
+        ctx.scale(-1, 1);
+        ctx.drawImage(carImg, 0, 0, car.width, car.height);
+      } else {
+        ctx.drawImage(carImg, car.x, car.y, car.width, car.height);
+      }
+      ctx.restore();
+    } else {
+      ctx.fillStyle = "#555a63";
+      ctx.fillRect(car.x, car.y, car.width, car.height);
+    }
+  }
+
+  // NPC.
+  const npc = cl.section.npc;
+  const npcTop = npc.y !== undefined ? npc.y : world.def.groundY - npc.height;
+  if (npcLoaded) {
+    ctx.drawImage(npcImg, npc.x, npcTop, npc.width, npc.height);
+  } else {
+    ctx.fillStyle = "#3a6ea5";
+    ctx.fillRect(npc.x, npcTop, npc.width, npc.height);
+  }
+
+  // Speech bubble — one slot per code digit; a slot shows "BEEP" instead
+  // of its digit while that digit is currently honked-over.
+  if (cl.cyclePhase === "showing") {
+    const bubbleW = 150;
+    const bubbleH = 54;
+    const bubbleX = npc.x + npc.width / 2 - bubbleW / 2;
+    const bubbleY = npcTop - bubbleH - 14;
+
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.strokeStyle = "#222";
+    ctx.lineWidth = 2;
+    roundRect(ctx, bubbleX, bubbleY, bubbleW, bubbleH, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    // little tail pointing down toward the NPC
+    ctx.beginPath();
+    ctx.moveTo(bubbleX + bubbleW / 2 - 8, bubbleY + bubbleH);
+    ctx.lineTo(bubbleX + bubbleW / 2 + 8, bubbleY + bubbleH);
+    ctx.lineTo(bubbleX + bubbleW / 2, bubbleY + bubbleH + 12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const slotW = bubbleW / 4;
+    for (let i = 0; i < 4; i++) {
+      const cx = bubbleX + slotW * i + slotW / 2;
+      const cy = bubbleY + bubbleH / 2;
+      if (cl.obscured[i] > 0) {
+        ctx.fillStyle = "#d1352c";
+        ctx.font = "bold 12px sans-serif";
+        ctx.fillText("BEEP", cx, cy);
+      } else {
+        ctx.fillStyle = "#222";
+        ctx.font = "bold 22px monospace";
+        ctx.fillText(cl.code[i], cx, cy);
+      }
+    }
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  }
+}
+
+// ---------- The on-screen keypad (opened by touching a locked mailbox) ----------
+let keypadEl = null;
+let pendingLockedMailbox = null;
+let keypadInput = "";
+
+function buildKeypadDOM() {
+  const root = document.createElement("div");
+  root.id = "keypad-overlay";
+  Object.assign(root.style, {
+    position: "absolute",
+    inset: "0",
+    display: "none",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "rgba(0,0,0,0.65)",
+    zIndex: "1000",
+    flexDirection: "column",
+  });
+
+  const panel = document.createElement("div");
+  Object.assign(panel.style, {
+    background: "#22242b",
+    padding: "24px",
+    borderRadius: "12px",
+    textAlign: "center",
+    color: "#fff",
+    fontFamily: "inherit",
+    minWidth: "260px",
+    boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
+  });
+
+  const heading = document.createElement("h2");
+  heading.textContent = "Enter the 4-Digit Code";
+  Object.assign(heading.style, { marginTop: "0", fontSize: "18px" });
+  panel.appendChild(heading);
+
+  const display = document.createElement("div");
+  display.id = "keypad-display";
+  Object.assign(display.style, {
+    fontSize: "30px",
+    letterSpacing: "6px",
+    margin: "10px 0",
+    minHeight: "38px",
+    fontFamily: "monospace",
+  });
+  panel.appendChild(display);
+
+  const feedback = document.createElement("div");
+  feedback.id = "keypad-feedback";
+  Object.assign(feedback.style, {
+    minHeight: "18px",
+    marginBottom: "10px",
+    fontSize: "13px",
+  });
+  panel.appendChild(feedback);
+
+  const grid = document.createElement("div");
+  Object.assign(grid.style, {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 56px)",
+    gap: "8px",
+    justifyContent: "center",
+  });
+  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "Enter"];
+  for (const k of keys) {
+    const b = document.createElement("button");
+    b.textContent = k;
+    b.className = "menu-btn";
+    Object.assign(b.style, { padding: "12px 0", fontSize: "15px" });
+    b.addEventListener("click", () => {
+      playButtonSound();
+      handleKeypadKey(k);
+    });
+    grid.appendChild(b);
+  }
+  panel.appendChild(grid);
+
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "Cancel";
+  closeBtn.className = "menu-btn";
+  Object.assign(closeBtn.style, { marginTop: "14px" });
+  closeBtn.addEventListener("click", () => {
+    playButtonSound();
+    hideKeypad();
+  });
+  panel.appendChild(closeBtn);
+
+  root.appendChild(panel);
+  document.getElementById("game-container").appendChild(root);
+  return { root, display, feedback };
+}
+
+function updateKeypadDisplay() {
+  const padded = keypadInput.padEnd(4, "_");
+  keypadEl.display.textContent = padded.split("").join(" ");
+}
+
+function showKeypad() {
+  if (!keypadEl) keypadEl = buildKeypadDOM();
+  keypadInput = "";
+  updateKeypadDisplay();
+  keypadEl.feedback.textContent = "";
+  keypadEl.feedback.style.color = "";
+  keypadEl.root.style.display = "flex";
+}
+
+/*
+function hideKeypad() {
+  if (keypadEl) keypadEl.root.style.display = "none";
+  pendingLockedMailbox = null;
+}
+  */
+ function hideKeypad() {
+  if (keypadEl) keypadEl.root.style.display = "none";
+  if (pendingLockedMailbox) pendingLockedMailbox._suppressReopen = true;
+  pendingLockedMailbox = null;
+}
+
+function openKeypadForMailbox(mb) {
+  if (!world.codeLock) return; // safety net: a locked mailbox with no puzzle data
+  if (keypadEl && keypadEl.root.style.display === "flex") return; // already open
+  pendingLockedMailbox = mb;
+  showKeypad();
+}
+
+function handleKeypadKey(k) {
+  if (!keypadEl) return;
+  if (k === "⌫") {
+    keypadInput = keypadInput.slice(0, -1);
+  } else if (k === "Enter") {
+    submitKeypadCode();
+    return;
+  } else if (/^[0-9]$/.test(k)) {
+    if (keypadInput.length < 4) keypadInput += k;
+  }
+  keypadEl.feedback.textContent = "";
+  updateKeypadDisplay();
+}
+
+function submitKeypadCode() {
+  if (!world.codeLock || !pendingLockedMailbox) return;
+  if (keypadInput.length < 4) {
+    keypadEl.feedback.textContent = "Enter all 4 digits first.";
+    keypadEl.feedback.style.color = "#ffb648";
+    return;
+  }
+
+  const correct = keypadInput === world.codeLock.code.join("");
+  if (correct) {
+    world.codeLock.solved = true;
+    pendingLockedMailbox.locked = false;
+    playMailboxBellSound();
+    keypadEl.feedback.textContent = "Correct! The mailbox unlocks.";
+    keypadEl.feedback.style.color = "#7CFF7C";
+    setTimeout(() => {
+      hideKeypad();
+    }, 700);
+  } else {
+    playButtonSound();
+    keypadEl.feedback.textContent = "That's not it. Listen again.";
+    keypadEl.feedback.style.color = "#ff6b6b";
+    keypadInput = "";
+    updateKeypadDisplay();
+  }
+}
+
 // Builds a level's map from scratch. Called at startup, when the player
 // returns to the main menu (a full reset to Level 1), and whenever the
 // level-select screen sends the player into a stage — including one in a
@@ -323,7 +760,8 @@ function loadWorld(levelIndex = 0, spawnOverride = null) {
     // copies just like movingPlatforms, since they need their own
     // `currentX` written in every frame.
     groundHazards: (WORLD.groundHazards || []).map((g) => ({ ...g })),
-    // mutable copies so `activated` can flip on without touching WORLD
+    // mutable copies so `activated` (and, for a locked mailbox, `locked`)
+    // can flip on/off without touching WORLD
     mailboxes: WORLD.mailboxes.map((m) => ({ ...m })),
     // Level 2+'s perched birds — mutable copies since each needs its own
     // countdown to its next chirp.
@@ -351,6 +789,7 @@ function loadWorld(levelIndex = 0, spawnOverride = null) {
   freezeTimer = 0;
   const menuBtn = document.getElementById("overlay-menu-btn");
   if (menuBtn) menuBtn.remove();
+  hideKeypad();
 
   if (hazardSpawner !== null) {
     // hazardSpawner is now an array of interval IDs (one per dynamic dog)
@@ -360,6 +799,7 @@ function loadWorld(levelIndex = 0, spawnOverride = null) {
 
   initDynamicHazard();
   initGapExpansion();
+  initCodeLock();
 }
 
 // Puts the player back at the latest checkpoint and resets the current
@@ -376,6 +816,7 @@ function respawnPlayer() {
     chirpTimer: randomBirdInterval(),
   }));
   freezeTimer = 0;
+  hideKeypad();
 
   if (hazardSpawner !== null) {
     // hazardSpawner is now an array of interval IDs (one per dynamic dog)
@@ -384,6 +825,7 @@ function respawnPlayer() {
   }
   initDynamicHazard();
   initGapExpansion();
+  resetCodeLockRunState();
 
   player = makePlayer(checkpoint);
   camera.x = clampCamera(player.x + player.w / 2);
@@ -578,6 +1020,41 @@ restartBtn.addEventListener("click", () => {
 });
 
 window.addEventListener("keydown", (e) => {
+  // While the code-entry keypad is open, it owns all keyboard input:
+  // digits/backspace/enter drive it directly, Escape cancels it, and
+  // everything else (movement, jump, pause) is swallowed so the player
+  // can't walk around or open the pause menu mid-entry.
+  if (keypadEl && keypadEl.root.style.display === "flex") {
+    if (/^Digit[0-9]$/.test(e.code)) {
+      handleKeypadKey(e.code.replace("Digit", ""));
+      e.preventDefault();
+      return;
+    }
+    if (/^Numpad[0-9]$/.test(e.code)) {
+      handleKeypadKey(e.code.replace("Numpad", ""));
+      e.preventDefault();
+      return;
+    }
+    if (e.code === "Backspace") {
+      handleKeypadKey("⌫");
+      e.preventDefault();
+      return;
+    }
+    if (e.code === "Enter" || e.code === "NumpadEnter") {
+      handleKeypadKey("Enter");
+      e.preventDefault();
+      return;
+    }
+    if (e.code === "Escape") {
+      playButtonSound();
+      hideKeypad();
+      e.preventDefault();
+      return;
+    }
+    e.preventDefault();
+    return;
+  }
+
   if (e.code === "ArrowLeft" || e.code === "KeyA") keys.left = true;
   if (e.code === "ArrowRight" || e.code === "KeyD") keys.right = true;
   if (e.code === "ArrowUp" || e.code === "Space" || e.code === "KeyW") {
@@ -809,8 +1286,27 @@ function randomBirdInterval() {
   return 3 + Math.random() * 4; // next chirp in 3–7s
 }
 
+/*
 function updateBirds(dt) {
+  
+  
   for (const b of world.birdState || []) {
+    b.chirpTimer -= dt;
+    if (b.chirpTimer <= 0) {
+      playBirdChirpSound();
+      freezeTimer = BIRD_FREEZE_DURATION;
+      b.chirpTimer = randomBirdInterval();
+    }
+  }
+}
+  */
+
+function updateBirds(dt) {
+  const playerSection = getSectionIndexForX(player.x);
+  for (const b of world.birdState || []) {
+    const birdSection = getSectionIndexForX(b.x);
+    if (birdSection !== playerSection) continue; // bird's stage isn't the one you're in
+
     b.chirpTimer -= dt;
     if (b.chirpTimer <= 0) {
       playBirdChirpSound();
@@ -919,6 +1415,7 @@ function update(dt) {
   updateTraps(dt);
   updateGapExpansion(dt);
   updateBirds(dt);
+  updateCarsAndNpc(dt);
 
   // horizontal input
   // Normal levels use instant velocity for responsive controls.
@@ -1107,6 +1604,10 @@ function update(dt) {
   // override the default "sitting on the ground" position. Hitbox size
   // (56x90) is unchanged and still matches mailbox.png exactly. Touching
   // a mailbox sets it as the respawn point; it no longer ends the level.
+  // A mailbox flagged `locked` (Level 2-2's code puzzle) doesn't complete
+  // on touch — it opens the code-entry keypad instead, and only behaves
+  // like a normal checkpoint once the correct code has unlocked it.
+  /*
   for (const mb of world.mailboxes) {
     const mbTop = mb.y !== undefined ? mb.y : world.def.groundY - mb.height;
     const playerCenterX = player.x + player.w / 2;
@@ -1120,9 +1621,41 @@ function update(dt) {
       Math.abs(playerCenterX - mbCenterX) < (player.w / 2 + mb.width / 2 + horizontalPadding) &&
       Math.abs(playerCenterY - mbCenterY) < (player.h / 2 + mb.height / 2 + verticalPadding)
     ) {
-      activateCheckpoint(mb);
+      if (mb.locked) {
+        openKeypadForMailbox(mb);
+      } else {
+        activateCheckpoint(mb);
+      }
     }
   }
+    */
+
+  for (const mb of world.mailboxes) {
+  const mbTop = mb.y !== undefined ? mb.y : world.def.groundY - mb.height;
+  const playerCenterX = player.x + player.w / 2;
+  const playerCenterY = player.y + player.h / 2;
+  const mbCenterX = mb.x + mb.width / 2;
+  const mbCenterY = mbTop + mb.height / 2;
+  const horizontalPadding = 8;
+  const verticalPadding = 10;
+
+  const overlapping =
+    Math.abs(playerCenterX - mbCenterX) < (player.w / 2 + mb.width / 2 + horizontalPadding) &&
+    Math.abs(playerCenterY - mbCenterY) < (player.h / 2 + mb.height / 2 + verticalPadding);
+
+  if (overlapping) {
+    if (mb.locked) {
+      if (!mb._suppressReopen) {
+        openKeypadForMailbox(mb);
+      }
+    } else {
+      activateCheckpoint(mb);
+    }
+  } else {
+    mb._suppressReopen = false; // player stepped away — arm it again for next time
+  }
+}
+
 
   updateLevelLabel();
 
@@ -1149,11 +1682,11 @@ function activateCheckpoint(mb) {
 
   // "Last stage of the level" means the last stage that's actually been
   // built so far (WORLD_DEFS[levelIndex].stageCount), not necessarily the
-  // full STAGES_PER_LEVEL — e.g. Level 2 currently only has L2-1 built, so
-  // clearing it should send the player back to Level Select just like
-  // clearing L1-5 does, rather than leaving them stranded with nothing
-  // further to do on that map. For Level 1 these are the same number (5),
-  // so its behavior is unchanged.
+  // full STAGES_PER_LEVEL — e.g. Level 2 currently only has L2-1 and
+  // L2-2 built, so clearing L2-2 should send the player back to Level
+  // Select just like clearing L1-5 does, rather than leaving them
+  // stranded with nothing further to do on that map. For Level 1 these
+  // are the same number (5), so its behavior is unchanged.
   const levelDef = WORLD_DEFS[mb.levelIndex];
   const builtStageCount = levelDef ? levelDef.stageCount : STAGES_PER_LEVEL;
   const isLastStageOfLevel = mb.stageIndex === builtStageCount - 1;
@@ -1246,6 +1779,11 @@ function draw() {
     }
   }
 
+  // Level 2-2's background cars + NPC (with its code speech-bubble) —
+  // purely a visual/informational layer, no collision, so it's drawn as
+  // background scenery alongside the trees/birds above.
+  drawCarsAndNpc();
+
   for (const t of world.trapState) {
     if (t.fallen) {
       // falling slab graphic dropping out of view
@@ -1337,7 +1875,9 @@ function draw() {
 
   // mailbox checkpoints, honoring each one's mb.y override. Renders
   // mailboxup.png until the checkpoint is reached, then swaps to
-  // mailboxdown.png to show that stage has been cleared.
+  // mailboxdown.png to show that stage has been cleared. A locked
+  // mailbox (Level 2-2) additionally gets a small padlock badge so it
+  // reads as "not ready yet" rather than broken/unreachable.
   for (const mb of world.mailboxes) {
     const mbTop = mb.y !== undefined ? mb.y : world.def.groundY - mb.height;
 
@@ -1352,6 +1892,14 @@ function draw() {
       ctx.fillRect(mb.x - 6, mbTop - 6, mb.width + 12, mb.height + 6);
       ctx.fillStyle = "#c9c9c9";
       ctx.fillRect(mb.x, mbTop, mb.width, mb.height);
+    }
+
+    if (mb.locked) {
+      ctx.fillStyle = "#ffd23f";
+      ctx.font = "bold 20px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("\uD83D\uDD12", mb.x + mb.width / 2, mbTop - 10);
+      ctx.textAlign = "left";
     }
   }
 
@@ -1441,9 +1989,11 @@ function frame(timestamp) {
     levelSelectEl &&
     levelSelectEl.root.style.display !== "none";
 
-  if (!overlay.classList.contains("hidden") || levelSelectOpen) {
-    // paused while overlay (level intro / end screen) or the level-select
-    // grid is up
+  const keypadOpen = !!(keypadEl && keypadEl.root.style.display === "flex");
+
+  if (!overlay.classList.contains("hidden") || levelSelectOpen || keypadOpen) {
+    // paused while overlay (level intro / end screen), the level-select
+    // grid, or the code-entry keypad is up
     requestAnimationFrame(frame);
     return;
   }
