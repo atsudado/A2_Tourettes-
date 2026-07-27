@@ -73,13 +73,18 @@ const whitedogImg = new Image();
 whitedogImg.src = WHITEDOG_SRC;
 let whitedogLoaded = false;
 
-// Level 2's decorative trees. Birds perched in them reuse dogImg above
-// (see TREE_DRAW_W/BIRD_DRAW_W etc. in levels.js) rather than loading a
-// separate sprite, since dedicated bird art isn't ready yet.
+// Level 2's decorative trees, plus the birds perched in them (see
+// TREE_DRAW_W/BIRD_DRAW_W etc. and birdOnTree() in level2.js). Each has
+// its own sprite.
 const TREE_SRC = "assets/images/tree.png";
 const treeImg = new Image();
 treeImg.src = TREE_SRC;
 let treeLoaded = false;
+
+const BIRD_SRC = "assets/images/bird.png";
+const birdImg = new Image();
+birdImg.src = BIRD_SRC;
+let birdImgLoaded = false;
 
 // Level 2 / Stage 2's NPC and background cars — PLACEHOLDER ART.
 // Swap these two path strings (and drop the matching files into
@@ -300,6 +305,7 @@ function preloadAllAssets() {
     preloadImage(box2Img, BOX2_SRC, (ok) => (box2Loaded = ok)),
     preloadImage(whitedogImg, WHITEDOG_SRC, (ok) => (whitedogLoaded = ok)),
     preloadImage(treeImg, TREE_SRC, (ok) => (treeLoaded = ok)),
+    preloadImage(birdImg, BIRD_SRC, (ok) => (birdImgLoaded = ok)),
     preloadImage(npcImg, NPC_PLACEHOLDER_SRC, (ok) => (npcLoaded = ok)),
     preloadImage(carImg, CAR_PLACEHOLDER_SRC, (ok) => (carLoaded = ok)),
   ]);
@@ -1768,11 +1774,11 @@ function draw() {
     }
   }
 
-  // birds perched in the trees (dog.png reused as a placeholder sprite —
-  // mechanically these are birds, not hazards; see updateBirds()).
+  // birds perched in the trees (mechanically these are birds, not
+  // hazards; see updateBirds()).
   for (const b of world.birdState || []) {
-    if (dogLoaded) {
-      ctx.drawImage(dogImg, b.x, b.y, b.width, b.height);
+    if (birdImgLoaded) {
+      ctx.drawImage(birdImg, b.x, b.y, b.width, b.height);
     } else {
       ctx.fillStyle = "#8a5a3a";
       ctx.fillRect(b.x, b.y, b.width, b.height);
