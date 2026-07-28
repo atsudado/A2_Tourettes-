@@ -175,7 +175,5 @@ const LEVEL_2_STAGES = [
     blocks: [],
     trees: [],
     birds: [],
-    // (storm removed) This stage no longer uses the storm/lightning
-    // weather system — lighting effects have been disabled for L2-4.
   },
 ];
