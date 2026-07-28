@@ -108,7 +108,12 @@ const birdImg = new Image();
 birdImg.src = BIRD_SRC;
 let birdImgLoaded = false;
 
-// Storm/lightning removed for Level 2 Stage 4.
+// Level 2 / Stage 4's ("Static") random lightning-ray flashes — see
+// findStormSection()/initWeather()/updateWeather()/drawWeather() below.
+const RAY_SRC = "assets/images/ray.png";
+const rayImg = new Image();
+rayImg.src = RAY_SRC;
+let rayLoaded = false;
 
 // Level 2 / Stage 2's NPC and background cars — PLACEHOLDER ART.
 // Swap these two path strings (and drop the matching files into
@@ -370,6 +375,7 @@ function preloadAllAssets() {
     preloadImage(birdImg, BIRD_SRC, (ok) => (birdImgLoaded = ok)),
     preloadImage(npcImg, NPC_PLACEHOLDER_SRC, (ok) => (npcLoaded = ok)),
     preloadImage(carImg, CAR_PLACEHOLDER_SRC, (ok) => (carLoaded = ok)),
+    preloadImage(rayImg, RAY_SRC, (ok) => (rayLoaded = ok)),
   ]);
 }
 
@@ -552,6 +558,100 @@ function updateCarsAndNpc(dt) {
         cl.obscured[order[i]] = CAR_HONK_OBSCURE_DURATION;
       }
     }
+  }
+}
+
+// ------------------------------------------------------------
+// Level 2 / Stage 4 ("Static") — random lightning-ray flashes.
+// Purely a screen-space visual (see drawWeather()): ray.png pops in at a
+// random x every SPAWN_INTERVAL_MIN–MAX seconds and stays visible for
+// RAY_VISIBLE_DURATION seconds before disappearing again.
+// ------------------------------------------------------------
+
+const RAY_VISIBLE_DURATION = 0.25; // seconds the ray stays on screen
+const RAY_SPAWN_INTERVAL_MIN = 1; // seconds between flashes (min)
+const RAY_SPAWN_INTERVAL_MAX = 5; // seconds between flashes (max)
+
+function findStormSection() {
+  return WORLD.sections.find((s) => s.storm);
+}
+
+function randomStormSpawnInterval() {
+  return (
+    RAY_SPAWN_INTERVAL_MIN +
+    Math.random() * (RAY_SPAWN_INTERVAL_MAX - RAY_SPAWN_INTERVAL_MIN)
+  );
+}
+
+// Full (re)init — called from loadWorld().
+function initWeather() {
+  const section = findStormSection();
+  if (!section) {
+    world.weather = null;
+    return;
+  }
+
+  world.weather = {
+    section,
+    rayVisible: false,
+    rayTimer: 0, // counts down while visible, counts down to next spawn otherwise
+    rayX: 0, // screen-space x of the current/next flash
+    spawnTimer: randomStormSpawnInterval(),
+  };
+}
+
+// Lighter reset — called from respawnPlayer().
+function resetWeatherRunState() {
+  if (!world.weather) return;
+  world.weather.rayVisible = false;
+  world.weather.spawnTimer = randomStormSpawnInterval();
+}
+
+function updateWeather(dt) {
+  const w = world.weather;
+  if (!w) return;
+
+  // Only active while the player is actually on the storm section —
+  // every other stage/level never spawns rays.
+  const onStormSection = getSectionIndexForX(player.x) === w.section.stageIndex;
+  if (!onStormSection) return;
+
+  if (w.rayVisible) {
+    w.spawnTimer -= dt;
+    if (w.spawnTimer <= 0) {
+      w.rayVisible = false;
+      w.spawnTimer = randomStormSpawnInterval();
+    }
+  } else {
+    w.spawnTimer -= dt;
+    if (w.spawnTimer <= 0) {
+      w.rayVisible = true;
+      // Random x across the visible canvas width.
+      w.rayX = Math.random() * VIEW_W;
+      w.spawnTimer = RAY_VISIBLE_DURATION;
+    }
+  }
+}
+
+// Screen-space (not world-space) so the ray flashes at a random spot on
+// the player's screen rather than a random spot in the level — called
+// after ctx.restore() in draw(), same as the other HUD-style overlays.
+const RAY_NATIVE_W = 74;
+const RAY_NATIVE_H = 367;
+
+function drawWeather() {
+  const w = world.weather;
+  if (!w || !w.rayVisible) return;
+
+  const rayH = VIEW_H;
+  const rayW = (RAY_NATIVE_W / RAY_NATIVE_H) * rayH;
+  const x = w.rayX - rayW / 2;
+
+  if (rayLoaded) {
+    ctx.drawImage(rayImg, x, 0, rayW, rayH);
+  } else {
+    ctx.fillStyle = "rgba(255, 255, 200, 0.85)";
+    ctx.fillRect(x, 0, rayW, rayH);
   }
 }
 
@@ -869,7 +969,7 @@ function loadWorld(levelIndex = 0, spawnOverride = null) {
   initDynamicHazard();
   initGapExpansion();
   initCodeLock();
-  // storm removed: no initWeather
+  initWeather();
 }
 
 // Puts the player back at the latest checkpoint and resets the current
@@ -897,7 +997,7 @@ function respawnPlayer() {
   initDynamicHazard();
   initGapExpansion();
   resetCodeLockRunState();
-  // storm removed: no initWeather
+  resetWeatherRunState();
 
   player = makePlayer(checkpoint);
   camera.x = clampCamera(player.x + player.w / 2);
@@ -1514,6 +1614,7 @@ function update(dt) {
   updateGapExpansion(dt);
   updateBirds(dt);
   updateCarsAndNpc(dt);
+  updateWeather(dt);
 
   // horizontal input
   // Normal levels use instant velocity for responsive controls.
@@ -2091,7 +2192,7 @@ function draw() {
 
   ctx.restore();
 
-  // storm removed: no lightning bolt or ray to draw
+  drawWeather();
 
   // ---- noise meter HUD (Level 2 / Stage 3 only) ----
   // Drawn in screen space (after ctx.restore(), so it ignores the camera

@@ -175,5 +175,9 @@ const LEVEL_2_STAGES = [
     blocks: [],
     trees: [],
     birds: [],
+    // Flags this section for the random lightning-ray flashes (see
+    // findStormSection()/initWeather()/updateWeather()/drawWeather() in
+    // main.js). Picked up automatically by buildWorld() in levels.js.
+    storm: true,
   },
 ];
