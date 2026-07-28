@@ -66,6 +66,12 @@ function buildWorld(stages, levelIndex = 0) {
           }
         : null,
       codeLock: !!def.codeLock,
+      // Level 2-4's thunderstorm weather (random-x lightning strikes +
+      // falling rain droplets — see initWeather()/updateWeather()/
+      // drawWeather() in main.js). Just a flag on the section; the actual
+      // rain-drop/lightning state lives on `world`, same pattern as
+      // codeLock/npc/cars above.
+      storm: !!def.storm,
     });
 
     for (const g of def.ground) {

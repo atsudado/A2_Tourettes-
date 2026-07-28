@@ -156,4 +156,29 @@ const LEVEL_2_STAGES = [
     trees: [],
     birds: [],
   },
+
+  {
+    title: "Stage 4 — Static",
+    intro:
+      "The sky finally lets go, all at once.\n" +
+      "Rain won't hurt you, but the light that follows the thunder can.\n" +
+      "Keep moving — standing still under the wrong flash is a bad idea.",
+    width: 1400,
+    groundY: LEVEL_2_GROUND_Y,
+    spawn: { x: 80, y: 450 },
+    door: { x: 1300, width: 56, height: 90 },
+    ground: [{ x: 0, width: 1400 }],
+    trapGround: [],
+    movingPlatforms: [],
+    hazards: [],
+    groundHazards: [],
+    blocks: [],
+    trees: [],
+    birds: [],
+    // Marks this section as the storm stage — see initWeather()/
+    // updateWeather()/drawWeather() in main.js. Rain droplets spawn at a
+    // random x across the stage and drift down; a lightning bolt strikes
+    // at a random x on its own timer.
+    storm: true,
+  },
 ];

@@ -108,6 +108,21 @@ const birdImg = new Image();
 birdImg.src = BIRD_SRC;
 let birdImgLoaded = false;
 
+// Level 2 / Stage 4's storm — a single lightning-bolt sprite (struck at a
+// random x, see initWeather()/updateWeather() below) and a single
+// raindrop sprite (spawned repeatedly at random x's, each with its own
+// fall speed). Note: the cloud asset for this stage isn't in yet — it'll
+// be added later, so the storm currently has no cloud layer.
+const LIGHTNING_SRC = "assets/images/lightning.png";
+const lightningImg = new Image();
+lightningImg.src = LIGHTNING_SRC;
+let lightningLoaded = false;
+
+const RAINDROP_SRC = "assets/images/raindrop.png";
+const raindropImg = new Image();
+raindropImg.src = RAINDROP_SRC;
+let raindropLoaded = false;
+
 // Level 2 / Stage 2's NPC and background cars — PLACEHOLDER ART.
 // Swap these two path strings (and drop the matching files into
 // assets/images/) to bring in the final sprites; nothing else needs to
@@ -366,6 +381,8 @@ function preloadAllAssets() {
     preloadImage(whitedogImg, WHITEDOG_SRC, (ok) => (whitedogLoaded = ok)),
     preloadImage(treeImg, TREE_SRC, (ok) => (treeLoaded = ok)),
     preloadImage(birdImg, BIRD_SRC, (ok) => (birdImgLoaded = ok)),
+    preloadImage(lightningImg, LIGHTNING_SRC, (ok) => (lightningLoaded = ok)),
+    preloadImage(raindropImg, RAINDROP_SRC, (ok) => (raindropLoaded = ok)),
     preloadImage(npcImg, NPC_PLACEHOLDER_SRC, (ok) => (npcLoaded = ok)),
     preloadImage(carImg, CAR_PLACEHOLDER_SRC, (ok) => (carLoaded = ok)),
   ]);
@@ -867,6 +884,7 @@ function loadWorld(levelIndex = 0, spawnOverride = null) {
   initDynamicHazard();
   initGapExpansion();
   initCodeLock();
+  initWeather();
 }
 
 // Puts the player back at the latest checkpoint and resets the current
@@ -894,6 +912,7 @@ function respawnPlayer() {
   initDynamicHazard();
   initGapExpansion();
   resetCodeLockRunState();
+  initWeather();
 
   player = makePlayer(checkpoint);
   camera.x = clampCamera(player.x + player.w / 2);
@@ -1480,6 +1499,97 @@ function updateGapExpansion(dt) {
   }
 }
 
+// ---------- Storm weather (Level 2 / Stage 4) ----------
+// Attached to `world` at load time as world.weather:
+// {
+//   section: <the storm section, or null if this level has none>,
+//   drops: [{ x, y, speed, w, h }],   // falling rain droplets
+//   dropTimer: <seconds until the next droplet spawns>,
+//   lightning: {
+//     timer: <seconds until the next strike>,
+//     x: <world-x of the current/last strike>,
+//     boltTimer: <seconds the bolt sprite is still visible>,
+//     flash: <0..1 screen-flash brightness, decays every frame>,
+//   },
+// }
+const RAIN_DROP_SPEED_MIN = 420;
+const RAIN_DROP_SPEED_MAX = 620;
+const RAIN_DROP_SPAWN_INTERVAL = 0.045; // seconds between new droplets
+const RAIN_DROP_W = 12;
+const RAIN_DROP_H = 19;
+const LIGHTNING_STRIKE_INTERVAL_MIN = 2.5;
+const LIGHTNING_STRIKE_INTERVAL_MAX = 5;
+const LIGHTNING_BOLT_DURATION = 0.18; // how long the bolt sprite stays drawn
+const LIGHTNING_BOLT_W = 60;
+
+function randomLightningInterval() {
+  return (
+    LIGHTNING_STRIKE_INTERVAL_MIN +
+    Math.random() *
+      (LIGHTNING_STRIKE_INTERVAL_MAX - LIGHTNING_STRIKE_INTERVAL_MIN)
+  );
+}
+
+function initWeather() {
+  // Storm is opt-in per section (only Level 2 / Stage 4 has it so far —
+  // see the `storm: true` flag on that stage's data in level2.js).
+  const stormSection = WORLD.sections.find((s) => s.storm) || null;
+
+  world.weather = {
+    section: stormSection,
+    drops: [],
+    dropTimer: 0,
+    lightning: stormSection
+      ? {
+          timer: randomLightningInterval(),
+          x: stormSection.startX + stormSection.width / 2,
+          boltTimer: 0,
+          flash: 0,
+        }
+      : null,
+  };
+}
+
+function updateWeather(dt) {
+  const w = world.weather;
+  if (!w || !w.section) return;
+  const section = w.section;
+
+  // ---- rain droplets: spawn at a random x across the stage, drift down ----
+  w.dropTimer -= dt;
+  if (w.dropTimer <= 0) {
+    w.dropTimer = RAIN_DROP_SPAWN_INTERVAL;
+    const dx = section.startX + Math.random() * section.width;
+    w.drops.push({
+      x: dx,
+      y: -20 - Math.random() * 200, // stagger start heights above the screen
+      speed: RAIN_DROP_SPEED_MIN + Math.random() * (RAIN_DROP_SPEED_MAX - RAIN_DROP_SPEED_MIN),
+      w: RAIN_DROP_W,
+      h: RAIN_DROP_H,
+    });
+  }
+  for (const d of w.drops) {
+    d.y += d.speed * dt;
+  }
+  // Drop anything that's fallen past the ground line — keeps the array
+  // from growing forever.
+  w.drops = w.drops.filter((d) => d.y < WORLD.groundY + 20);
+
+  // ---- lightning: strikes at a random x on its own timer ----
+  const lg = w.lightning;
+  if (lg) {
+    lg.timer -= dt;
+    if (lg.timer <= 0) {
+      lg.x = section.startX + Math.random() * section.width;
+      lg.boltTimer = LIGHTNING_BOLT_DURATION;
+      lg.flash = 0.55;
+      lg.timer = randomLightningInterval();
+    }
+    if (lg.boltTimer > 0) lg.boltTimer -= dt;
+    if (lg.flash > 0) lg.flash = Math.max(0, lg.flash - dt * 1.4);
+  }
+}
+
 // ---------- Flashing hazard boxes (Stage 5) ----------
 // Each hazard tagged `flash: true` blinks on its own independent on/off
 // cycle (flashOn seconds visible, flashOff seconds invisible, flashPhase
@@ -1508,6 +1618,7 @@ function update(dt) {
   updateGapExpansion(dt);
   updateBirds(dt);
   updateCarsAndNpc(dt);
+  updateWeather(dt);
 
   // horizontal input
   // Normal levels use instant velocity for responsive controls.
@@ -1946,6 +2057,38 @@ function draw() {
     }
   }
 
+  // Level 2-4's storm — rain droplets + a lightning bolt, both struck/
+  // spawned at random x's (see initWeather()/updateWeather() above).
+  // Purely visual/background; falls back to simple shapes if the sprites
+  // haven't loaded.
+  const weather = world.weather;
+  if (weather && weather.section) {
+    for (const d of weather.drops) {
+      if (raindropLoaded) {
+        ctx.drawImage(raindropImg, d.x, d.y, d.w, d.h);
+      } else {
+        ctx.fillStyle = "rgba(140, 190, 255, 0.85)";
+        ctx.fillRect(d.x, d.y, d.w, d.h);
+      }
+    }
+
+    const lg = weather.lightning;
+    if (lg && lg.boltTimer > 0) {
+      if (lightningLoaded) {
+        ctx.drawImage(
+          lightningImg,
+          lg.x - LIGHTNING_BOLT_W / 2,
+          0,
+          LIGHTNING_BOLT_W,
+          world.def.groundY,
+        );
+      } else {
+        ctx.fillStyle = "rgba(255, 245, 180, 0.9)";
+        ctx.fillRect(lg.x - LIGHTNING_BOLT_W / 4, 0, LIGHTNING_BOLT_W / 2, world.def.groundY);
+      }
+    }
+  }
+
   // Level 2-2's background cars + NPC (with its code speech-bubble) —
   // purely a visual/informational layer, no collision, so it's drawn as
   // background scenery alongside the trees/birds above.
@@ -2082,6 +2225,14 @@ function draw() {
   }
 
   ctx.restore();
+
+  // ---- lightning screen flash (Level 2 / Stage 4 only) ----
+  // Drawn in screen space (after ctx.restore()) so the flash covers the
+  // whole viewport instantly instead of panning with the camera.
+  if (world.weather && world.weather.lightning && world.weather.lightning.flash > 0) {
+    ctx.fillStyle = `rgba(255, 255, 255, ${world.weather.lightning.flash})`;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  }
 
   // ---- noise meter HUD (Level 2 / Stage 3 only) ----
   // Drawn in screen space (after ctx.restore(), so it ignores the camera
