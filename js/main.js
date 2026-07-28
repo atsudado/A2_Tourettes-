@@ -1517,10 +1517,15 @@ const RAIN_DROP_SPEED_MAX = 620;
 const RAIN_DROP_SPAWN_INTERVAL = 0.045; // seconds between new droplets
 const RAIN_DROP_W = 12;
 const RAIN_DROP_H = 19;
-const LIGHTNING_STRIKE_INTERVAL_MIN = 2.5;
-const LIGHTNING_STRIKE_INTERVAL_MAX = 5;
-const LIGHTNING_BOLT_DURATION = 0.18; // how long the bolt sprite stays drawn
-const LIGHTNING_BOLT_W = 60;
+// Tuned to be clearly noticeable: strikes every couple of seconds, each
+// visible (bolt + screen flash) for well over a quarter second.
+const LIGHTNING_STRIKE_INTERVAL_MIN = 1.8;
+const LIGHTNING_STRIKE_INTERVAL_MAX = 3.5;
+const LIGHTNING_FIRST_STRIKE_DELAY = 0.6; // first strike comes quickly, not after a full interval
+const LIGHTNING_BOLT_DURATION = 0.4; // how long the bolt sprite stays drawn
+const LIGHTNING_FLASH_PEAK = 0.75;
+const LIGHTNING_FLASH_DECAY = 0.9; // per second — bigger = fades faster
+const LIGHTNING_BOLT_W = 90;
 
 function randomLightningInterval() {
   return (
@@ -1541,7 +1546,7 @@ function initWeather() {
     dropTimer: 0,
     lightning: stormSection
       ? {
-          timer: randomLightningInterval(),
+          timer: LIGHTNING_FIRST_STRIKE_DELAY,
           x: stormSection.startX + stormSection.width / 2,
           boltTimer: 0,
           flash: 0,
@@ -1582,11 +1587,11 @@ function updateWeather(dt) {
     if (lg.timer <= 0) {
       lg.x = section.startX + Math.random() * section.width;
       lg.boltTimer = LIGHTNING_BOLT_DURATION;
-      lg.flash = 0.55;
+      lg.flash = LIGHTNING_FLASH_PEAK;
       lg.timer = randomLightningInterval();
     }
     if (lg.boltTimer > 0) lg.boltTimer -= dt;
-    if (lg.flash > 0) lg.flash = Math.max(0, lg.flash - dt * 1.4);
+    if (lg.flash > 0) lg.flash = Math.max(0, lg.flash - dt * LIGHTNING_FLASH_DECAY);
   }
 }
 
@@ -2063,6 +2068,17 @@ function draw() {
   // haven't loaded.
   const weather = world.weather;
   if (weather && weather.section) {
+    // Darkened storm sky, confined to just this section's x-range, so the
+    // stage visually reads as stormy and the lightning flash pops against
+    // it (also makes it obvious you've actually reached L2-4).
+    ctx.fillStyle = "rgba(20, 25, 45, 0.35)";
+    ctx.fillRect(
+      weather.section.startX,
+      0,
+      weather.section.width,
+      world.def.groundY,
+    );
+
     for (const d of weather.drops) {
       if (raindropLoaded) {
         ctx.drawImage(raindropImg, d.x, d.y, d.w, d.h);
