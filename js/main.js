@@ -108,24 +108,7 @@ const birdImg = new Image();
 birdImg.src = BIRD_SRC;
 let birdImgLoaded = false;
 
-// Level 2 / Stage 4's storm — a lightning-bolt sprite (struck at a
-// random x, see initWeather()/updateWeather() below), a ray sprite that
-// flashes across the screen at the strike point, and a raindrop sprite
-// (spawned repeatedly at random x's, each with its own fall speed).
-const LIGHTNING_SRC = "assets/images/lightning.png";
-const lightningImg = new Image();
-lightningImg.src = LIGHTNING_SRC;
-let lightningLoaded = false;
-
-const RAY_SRC = "assets/images/ray.png";
-const rayImg = new Image();
-rayImg.src = RAY_SRC;
-let rayLoaded = false;
-
-const RAINDROP_SRC = "assets/images/raindrop.png";
-const raindropImg = new Image();
-raindropImg.src = RAINDROP_SRC;
-let raindropLoaded = false;
+// Storm/lightning removed for Level 2 Stage 4.
 
 // Level 2 / Stage 2's NPC and background cars — PLACEHOLDER ART.
 // Swap these two path strings (and drop the matching files into
@@ -385,9 +368,6 @@ function preloadAllAssets() {
     preloadImage(whitedogImg, WHITEDOG_SRC, (ok) => (whitedogLoaded = ok)),
     preloadImage(treeImg, TREE_SRC, (ok) => (treeLoaded = ok)),
     preloadImage(birdImg, BIRD_SRC, (ok) => (birdImgLoaded = ok)),
-    preloadImage(lightningImg, LIGHTNING_SRC, (ok) => (lightningLoaded = ok)),
-    preloadImage(rayImg, RAY_SRC, (ok) => (rayLoaded = ok)),
-    preloadImage(raindropImg, RAINDROP_SRC, (ok) => (raindropLoaded = ok)),
     preloadImage(npcImg, NPC_PLACEHOLDER_SRC, (ok) => (npcLoaded = ok)),
     preloadImage(carImg, CAR_PLACEHOLDER_SRC, (ok) => (carLoaded = ok)),
   ]);
@@ -889,7 +869,7 @@ function loadWorld(levelIndex = 0, spawnOverride = null) {
   initDynamicHazard();
   initGapExpansion();
   initCodeLock();
-  initWeather();
+  // storm removed: no initWeather
 }
 
 // Puts the player back at the latest checkpoint and resets the current
@@ -917,7 +897,7 @@ function respawnPlayer() {
   initDynamicHazard();
   initGapExpansion();
   resetCodeLockRunState();
-  initWeather();
+  // storm removed: no initWeather
 
   player = makePlayer(checkpoint);
   camera.x = clampCamera(player.x + player.w / 2);
@@ -1504,140 +1484,7 @@ function updateGapExpansion(dt) {
   }
 }
 
-// ---------- Storm weather (Level 2 / Stage 4) ----------
-// Attached to `world` at load time as world.weather:
-// {
-//   section: <the storm section, or null if this level has none>,
-//   drops: [{ x, y, speed, w, h }],   // falling rain droplets
-//   dropTimer: <seconds until the next droplet spawns>,
-//   lightning: {
-//     timer: <seconds until the next strike>,
-//     x: <world-x of the current/last strike>,
-//     boltTimer: <seconds the bolt sprite is still visible>,
-//     rayTimer: <seconds the ray sprite is still visible>,
-//     flash: <0..1 screen-flash brightness, decays every frame>,
-//   },
-// }
-const RAIN_DROP_SPEED_MIN = 420;
-const RAIN_DROP_SPEED_MAX = 620;
-const RAIN_DROP_SPAWN_INTERVAL = 0.045; // seconds between new droplets
-const RAIN_DROP_W = 12;
-const RAIN_DROP_H = 19;
-// Tuned to be clearly noticeable: strikes every couple of seconds, each
-// visible (bolt + screen flash) for well over a quarter second.
-const LIGHTNING_STRIKE_INTERVAL_MIN = 1.8;
-const LIGHTNING_STRIKE_INTERVAL_MAX = 3.5;
-const LIGHTNING_FIRST_STRIKE_DELAY = 0.6; // first strike comes quickly, not after a full interval
-const LIGHTNING_BOLT_DURATION = 0.4; // how long the bolt sprite stays drawn
-const LIGHTNING_FLASH_PEAK = 0.75;
-const LIGHTNING_FLASH_DECAY = 0.9; // per second — bigger = fades faster
-const LIGHTNING_BOLT_W = 90;
-
-function randomLightningInterval() {
-  return (
-    LIGHTNING_STRIKE_INTERVAL_MIN +
-    Math.random() *
-      (LIGHTNING_STRIKE_INTERVAL_MAX - LIGHTNING_STRIKE_INTERVAL_MIN)
-  );
-}
-
-function initWeather() {
-  // Storm is opt-in per section (only Level 2 / Stage 4 has it so far —
-  // see the `storm: true` flag on that stage's data in level2.js).
-  const stormSection = WORLD.sections.find((s) => s.storm) || null;
-
-  world.weather = {
-    section: stormSection,
-    // Whether the player is CURRENTLY standing inside the storm section —
-    // recomputed every update() call. Both update and draw gate on this so
-    // nothing (rain, lightning bolt, screen flash) ever shows up outside
-    // that one stage, even though `section` itself stays set for the rest
-    // of the level.
-    active: false,
-    drops: [],
-    dropTimer: 0,
-    lightning: stormSection
-      ? {
-          timer: LIGHTNING_FIRST_STRIKE_DELAY,
-          x: stormSection.startX + stormSection.width / 2,
-          boltTimer: 0,
-          rayTimer: 0,
-          flash: 0,
-        }
-      : null,
-  };
-}
-
-function updateWeather(dt) {
-  const w = world.weather;
-  if (!w || !w.section) return;
-  const section = w.section;
-
-  w.active = getSectionIndexForX(player.x) === section.index;
-
-  if (!w.active) {
-    // Not currently on the storm stage — let anything already in-flight
-    // keep falling/fading out naturally, but don't spawn anything new and
-    // don't arm the lightning timer, so nothing leaks into other stages.
-    for (const d of w.drops) d.y += d.speed * dt;
-    w.drops = w.drops.filter((d) => d.y < WORLD.groundY + 20);
-    if (w.lightning) {
-      if (w.lightning.boltTimer > 0) w.lightning.boltTimer -= dt;
-      if (w.lightning.rayTimer > 0) w.lightning.rayTimer -= dt;
-      if (w.lightning.flash > 0) {
-        w.lightning.flash = Math.max(
-          0,
-          w.lightning.flash - dt * LIGHTNING_FLASH_DECAY,
-        );
-      }
-    }
-    return;
-  }
-
-  // Visible x-range: intersect the current camera view with the section's
-  // own bounds, so every droplet/bolt actually spawns somewhere ON SCREEN
-  // instead of possibly landing off in an unseen part of the stage.
-  const viewLeft = Math.max(section.startX, camera.x);
-  const viewRight = Math.min(section.startX + section.width, camera.x + VIEW_W);
-  const viewSpan = Math.max(1, viewRight - viewLeft);
-
-  // ---- rain droplets: spawn at a random x across the visible stretch,
-  // drift down ----
-  w.dropTimer -= dt;
-  if (w.dropTimer <= 0) {
-    w.dropTimer = RAIN_DROP_SPAWN_INTERVAL;
-    const dx = viewLeft + Math.random() * viewSpan;
-    w.drops.push({
-      x: dx,
-      y: -20 - Math.random() * 200, // stagger start heights above the screen
-      speed: RAIN_DROP_SPEED_MIN + Math.random() * (RAIN_DROP_SPEED_MAX - RAIN_DROP_SPEED_MIN),
-      w: RAIN_DROP_W,
-      h: RAIN_DROP_H,
-    });
-  }
-  for (const d of w.drops) {
-    d.y += d.speed * dt;
-  }
-  // Drop anything that's fallen past the ground line — keeps the array
-  // from growing forever.
-  w.drops = w.drops.filter((d) => d.y < WORLD.groundY + 20);
-
-  // ---- lightning: strikes at a random x within view, on its own timer ----
-  const lg = w.lightning;
-  if (lg) {
-    lg.timer -= dt;
-    if (lg.timer <= 0) {
-      lg.x = viewLeft + Math.random() * viewSpan;
-      lg.boltTimer = LIGHTNING_BOLT_DURATION;
-      lg.rayTimer = LIGHTNING_BOLT_DURATION;
-      lg.flash = LIGHTNING_FLASH_PEAK;
-      lg.timer = randomLightningInterval();
-    }
-    if (lg.boltTimer > 0) lg.boltTimer -= dt;
-    if (lg.rayTimer > 0) lg.rayTimer -= dt;
-    if (lg.flash > 0) lg.flash = Math.max(0, lg.flash - dt * LIGHTNING_FLASH_DECAY);
-  }
-}
+// Storm/weather system removed for Level 2 Stage 4.
 
 // ---------- Flashing hazard boxes (Stage 5) ----------
 // Each hazard tagged `flash: true` blinks on its own independent on/off
@@ -1667,7 +1514,6 @@ function update(dt) {
   updateGapExpansion(dt);
   updateBirds(dt);
   updateCarsAndNpc(dt);
-  updateWeather(dt);
 
   // horizontal input
   // Normal levels use instant velocity for responsive controls.
@@ -2106,40 +1952,7 @@ function draw() {
     }
   }
 
-  // Level 2-4's storm — rain droplets + a lightning bolt, both struck/
-  // spawned at random x's (see initWeather()/updateWeather() above).
-  // Purely visual/background; falls back to simple shapes if the sprites
-  // haven't loaded.
-  const weather = world.weather;
-  if (weather && weather.active) {
-    // Darkened storm sky, confined to just this section's x-range, so the
-    // stage visually reads as stormy and the lightning flash pops against
-    // it (also makes it obvious you've actually reached L2-4).
-    ctx.fillStyle = "rgba(20, 25, 45, 0.35)";
-    ctx.fillRect(
-      weather.section.startX,
-      0,
-      weather.section.width,
-      world.def.groundY,
-    );
-
-    for (const d of weather.drops) {
-      if (raindropLoaded) {
-        ctx.drawImage(raindropImg, d.x, d.y, d.w, d.h);
-      } else {
-        ctx.fillStyle = "rgba(140, 190, 255, 0.85)";
-        ctx.fillRect(d.x, d.y, d.w, d.h);
-      }
-    }
-
-    // NOTE: the bolt sprite itself is drawn later, in screen space right
-    // alongside the flash (see "lightning bolt + screen flash" below) —
-    // not here. Drawing it here, underneath the rest of the world, meant
-    // the later full-screen white flash rect painted right over it, so a
-    // strike read as just a plain white flash with no visible ray.
-    // Drawing both together after ctx.restore(), bolt on top of the
-    // flash, is what actually keeps the ray visible during a strike.
-  }
+  // storm removed: no storm visuals to draw here
 
   // Level 2-2's background cars + NPC (with its code speech-bubble) —
   // purely a visual/informational layer, no collision, so it's drawn as
@@ -2278,44 +2091,7 @@ function draw() {
 
   ctx.restore();
 
-  // ---- lightning bolt (Level 2 / Stage 4 only) ----
-  // Drawn in screen space (after ctx.restore()) so the bolt remains visible
-  // without the white flash overlay.
-  if (world.weather && world.weather.active && world.weather.lightning) {
-    const lg = world.weather.lightning;
-
-    if (lg.boltTimer > 0) {
-      const screenX = lg.x - camera.x;
-      if (lightningLoaded) {
-        ctx.drawImage(
-          lightningImg,
-          screenX - LIGHTNING_BOLT_W / 2,
-          0,
-          LIGHTNING_BOLT_W,
-          world.def.groundY,
-        );
-      } else {
-        ctx.fillStyle = "rgba(255, 245, 180, 0.9)";
-        ctx.fillRect(screenX - LIGHTNING_BOLT_W / 4, 0, LIGHTNING_BOLT_W / 2, world.def.groundY);
-      }
-    }
-
-    if (lg.rayTimer > 0) {
-      const screenX = lg.x - camera.x;
-      if (rayLoaded) {
-        ctx.drawImage(
-          rayImg,
-          screenX - 110,
-          0,
-          220,
-          world.def.groundY,
-        );
-      } else {
-        ctx.fillStyle = "rgba(255, 245, 180, 0.55)";
-        ctx.fillRect(screenX - 110, 0, 220, world.def.groundY);
-      }
-    }
-  }
+  // storm removed: no lightning bolt or ray to draw
 
   // ---- noise meter HUD (Level 2 / Stage 3 only) ----
   // Drawn in screen space (after ctx.restore(), so it ignores the camera

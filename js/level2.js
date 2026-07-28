@@ -175,10 +175,7 @@ const LEVEL_2_STAGES = [
     blocks: [],
     trees: [],
     birds: [],
-    // Marks this section as the storm stage — see initWeather()/
-    // updateWeather()/drawWeather() in main.js. Rain droplets spawn at a
-    // random x across the stage and drift down; a lightning bolt strikes
-    // at a random x on its own timer.
-    storm: true,
+    // (storm removed) This stage no longer uses the storm/lightning
+    // weather system — lighting effects have been disabled for L2-4.
   },
 ];
