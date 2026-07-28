@@ -108,15 +108,19 @@ const birdImg = new Image();
 birdImg.src = BIRD_SRC;
 let birdImgLoaded = false;
 
-// Level 2 / Stage 4's storm — a single lightning-bolt sprite (struck at a
-// random x, see initWeather()/updateWeather() below) and a single
-// raindrop sprite (spawned repeatedly at random x's, each with its own
-// fall speed). Note: the cloud asset for this stage isn't in yet — it'll
-// be added later, so the storm currently has no cloud layer.
+// Level 2 / Stage 4's storm — a lightning-bolt sprite (struck at a
+// random x, see initWeather()/updateWeather() below), a ray sprite that
+// flashes across the screen at the strike point, and a raindrop sprite
+// (spawned repeatedly at random x's, each with its own fall speed).
 const LIGHTNING_SRC = "assets/images/lightning.png";
 const lightningImg = new Image();
 lightningImg.src = LIGHTNING_SRC;
 let lightningLoaded = false;
+
+const RAY_SRC = "assets/images/ray.png";
+const rayImg = new Image();
+rayImg.src = RAY_SRC;
+let rayLoaded = false;
 
 const RAINDROP_SRC = "assets/images/raindrop.png";
 const raindropImg = new Image();
@@ -382,6 +386,7 @@ function preloadAllAssets() {
     preloadImage(treeImg, TREE_SRC, (ok) => (treeLoaded = ok)),
     preloadImage(birdImg, BIRD_SRC, (ok) => (birdImgLoaded = ok)),
     preloadImage(lightningImg, LIGHTNING_SRC, (ok) => (lightningLoaded = ok)),
+    preloadImage(rayImg, RAY_SRC, (ok) => (rayLoaded = ok)),
     preloadImage(raindropImg, RAINDROP_SRC, (ok) => (raindropLoaded = ok)),
     preloadImage(npcImg, NPC_PLACEHOLDER_SRC, (ok) => (npcLoaded = ok)),
     preloadImage(carImg, CAR_PLACEHOLDER_SRC, (ok) => (carLoaded = ok)),
@@ -1509,6 +1514,7 @@ function updateGapExpansion(dt) {
 //     timer: <seconds until the next strike>,
 //     x: <world-x of the current/last strike>,
 //     boltTimer: <seconds the bolt sprite is still visible>,
+//     rayTimer: <seconds the ray sprite is still visible>,
 //     flash: <0..1 screen-flash brightness, decays every frame>,
 //   },
 // }
@@ -1555,6 +1561,7 @@ function initWeather() {
           timer: LIGHTNING_FIRST_STRIKE_DELAY,
           x: stormSection.startX + stormSection.width / 2,
           boltTimer: 0,
+          rayTimer: 0,
           flash: 0,
         }
       : null,
@@ -1576,6 +1583,7 @@ function updateWeather(dt) {
     w.drops = w.drops.filter((d) => d.y < WORLD.groundY + 20);
     if (w.lightning) {
       if (w.lightning.boltTimer > 0) w.lightning.boltTimer -= dt;
+      if (w.lightning.rayTimer > 0) w.lightning.rayTimer -= dt;
       if (w.lightning.flash > 0) {
         w.lightning.flash = Math.max(
           0,
@@ -1621,10 +1629,12 @@ function updateWeather(dt) {
     if (lg.timer <= 0) {
       lg.x = viewLeft + Math.random() * viewSpan;
       lg.boltTimer = LIGHTNING_BOLT_DURATION;
+      lg.rayTimer = LIGHTNING_BOLT_DURATION;
       lg.flash = LIGHTNING_FLASH_PEAK;
       lg.timer = randomLightningInterval();
     }
     if (lg.boltTimer > 0) lg.boltTimer -= dt;
+    if (lg.rayTimer > 0) lg.rayTimer -= dt;
     if (lg.flash > 0) lg.flash = Math.max(0, lg.flash - dt * LIGHTNING_FLASH_DECAY);
   }
 }
@@ -2268,19 +2278,11 @@ function draw() {
 
   ctx.restore();
 
-  // ---- lightning bolt + screen flash (Level 2 / Stage 4 only) ----
-  // Both drawn in screen space (after ctx.restore()), flash first and the
-  // bolt sprite on top of it — so the strike reads as a bright ray against
-  // a brightened sky, not just a flat white flash. (The bolt used to be
-  // drawn earlier, in world space under the rest of the level; the flash
-  // rect below then painted straight over it, hiding it completely.)
+  // ---- lightning bolt (Level 2 / Stage 4 only) ----
+  // Drawn in screen space (after ctx.restore()) so the bolt remains visible
+  // without the white flash overlay.
   if (world.weather && world.weather.active && world.weather.lightning) {
     const lg = world.weather.lightning;
-
-    if (lg.flash > 0) {
-      ctx.fillStyle = `rgba(255, 255, 255, ${lg.flash})`;
-      ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    }
 
     if (lg.boltTimer > 0) {
       const screenX = lg.x - camera.x;
@@ -2295,6 +2297,22 @@ function draw() {
       } else {
         ctx.fillStyle = "rgba(255, 245, 180, 0.9)";
         ctx.fillRect(screenX - LIGHTNING_BOLT_W / 4, 0, LIGHTNING_BOLT_W / 2, world.def.groundY);
+      }
+    }
+
+    if (lg.rayTimer > 0) {
+      const screenX = lg.x - camera.x;
+      if (rayLoaded) {
+        ctx.drawImage(
+          rayImg,
+          screenX - 110,
+          0,
+          220,
+          world.def.groundY,
+        );
+      } else {
+        ctx.fillStyle = "rgba(255, 245, 180, 0.55)";
+        ctx.fillRect(screenX - 110, 0, 220, world.def.groundY);
       }
     }
   }
