@@ -563,7 +563,7 @@ function updateCarsAndNpc(dt) {
 
 // ------------------------------------------------------------
 // Level 2 / Stage 4 ("Static") — random lightning-ray flashes.
-// Purely a screen-space visual (see drawWeather()): ray.png pops in at a
+// A background world-space visual (see drawWeather()): ray.png pops in at a
 // random x every SPAWN_INTERVAL_MIN–MAX seconds and stays visible for
 // RAY_VISIBLE_DURATION seconds before disappearing again.
 // ------------------------------------------------------------
@@ -595,7 +595,7 @@ function initWeather() {
     section,
     rayVisible: false,
     rayTimer: 0, // counts down while visible, counts down to next spawn otherwise
-    rayX: 0, // screen-space x of the current/next flash
+    rayX: 0, // world-space x of the current/next flash
     spawnTimer: randomStormSpawnInterval(),
   };
 }
@@ -626,32 +626,38 @@ function updateWeather(dt) {
     w.spawnTimer -= dt;
     if (w.spawnTimer <= 0) {
       w.rayVisible = true;
-      // Random x across the visible canvas width.
-      w.rayX = Math.random() * VIEW_W;
+      // Random x within the storm stage's own bounds (world space), so
+      // the ray only ever appears somewhere between the start and end
+      // of Level 2-4, not tied to the camera/viewport.
+      w.rayX =
+        w.section.startX + Math.random() * (w.section.endX - w.section.startX);
       w.spawnTimer = RAY_VISIBLE_DURATION;
     }
   }
 }
 
-// Screen-space (not world-space) so the ray flashes at a random spot on
-// the player's screen rather than a random spot in the level — called
-// after ctx.restore() in draw(), same as the other HUD-style overlays.
+// World-space (not screen-space) so the ray flashes at a random spot over
+// the level's own ground instead of tracking the camera/viewport — called
+// from draw() right after the backdrop, before the trees/player, so it
+// sits behind everything as background scenery.
 const RAY_NATIVE_W = 74;
 const RAY_NATIVE_H = 367;
+const RAY_SCALE = 0.5; // 50% size, per the "too big" note
 
 function drawWeather() {
   const w = world.weather;
   if (!w || !w.rayVisible) return;
 
-  const rayH = VIEW_H;
+  const rayH = VIEW_H * RAY_SCALE;
   const rayW = (RAY_NATIVE_W / RAY_NATIVE_H) * rayH;
   const x = w.rayX - rayW / 2;
+  const y = world.def.groundY - rayH;
 
   if (rayLoaded) {
-    ctx.drawImage(rayImg, x, 0, rayW, rayH);
+    ctx.drawImage(rayImg, x, y, rayW, rayH);
   } else {
     ctx.fillStyle = "rgba(255, 255, 200, 0.85)";
-    ctx.fillRect(x, 0, rayW, rayH);
+    ctx.fillRect(x, y, rayW, rayH);
   }
 }
 
@@ -2030,6 +2036,12 @@ function draw() {
     }
   }
 
+  // background lightning ray (Level 2 / Stage 4) — purely visual, no
+  // collision, drawn in world space (so it stays put over the level
+  // instead of tracking the camera) right after the backdrop, same as
+  // the trees below.
+  drawWeather();
+
   // decorative trees (Level 2's evenly-spaced tree.png) — purely visual,
   // no collision, so they're drawn early as background scenery.
   for (const tr of world.def.trees || []) {
@@ -2191,8 +2203,6 @@ function draw() {
   }
 
   ctx.restore();
-
-  drawWeather();
 
   // ---- noise meter HUD (Level 2 / Stage 3 only) ----
   // Drawn in screen space (after ctx.restore(), so it ignores the camera
