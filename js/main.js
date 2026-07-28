@@ -1542,6 +1542,12 @@ function initWeather() {
 
   world.weather = {
     section: stormSection,
+    // Whether the player is CURRENTLY standing inside the storm section —
+    // recomputed every update() call. Both update and draw gate on this so
+    // nothing (rain, lightning bolt, screen flash) ever shows up outside
+    // that one stage, even though `section` itself stays set for the rest
+    // of the level.
+    active: false,
     drops: [],
     dropTimer: 0,
     lightning: stormSection
@@ -1560,11 +1566,39 @@ function updateWeather(dt) {
   if (!w || !w.section) return;
   const section = w.section;
 
-  // ---- rain droplets: spawn at a random x across the stage, drift down ----
+  w.active = getSectionIndexForX(player.x) === section.index;
+
+  if (!w.active) {
+    // Not currently on the storm stage — let anything already in-flight
+    // keep falling/fading out naturally, but don't spawn anything new and
+    // don't arm the lightning timer, so nothing leaks into other stages.
+    for (const d of w.drops) d.y += d.speed * dt;
+    w.drops = w.drops.filter((d) => d.y < WORLD.groundY + 20);
+    if (w.lightning) {
+      if (w.lightning.boltTimer > 0) w.lightning.boltTimer -= dt;
+      if (w.lightning.flash > 0) {
+        w.lightning.flash = Math.max(
+          0,
+          w.lightning.flash - dt * LIGHTNING_FLASH_DECAY,
+        );
+      }
+    }
+    return;
+  }
+
+  // Visible x-range: intersect the current camera view with the section's
+  // own bounds, so every droplet/bolt actually spawns somewhere ON SCREEN
+  // instead of possibly landing off in an unseen part of the stage.
+  const viewLeft = Math.max(section.startX, camera.x);
+  const viewRight = Math.min(section.startX + section.width, camera.x + VIEW_W);
+  const viewSpan = Math.max(1, viewRight - viewLeft);
+
+  // ---- rain droplets: spawn at a random x across the visible stretch,
+  // drift down ----
   w.dropTimer -= dt;
   if (w.dropTimer <= 0) {
     w.dropTimer = RAIN_DROP_SPAWN_INTERVAL;
-    const dx = section.startX + Math.random() * section.width;
+    const dx = viewLeft + Math.random() * viewSpan;
     w.drops.push({
       x: dx,
       y: -20 - Math.random() * 200, // stagger start heights above the screen
@@ -1580,12 +1614,12 @@ function updateWeather(dt) {
   // from growing forever.
   w.drops = w.drops.filter((d) => d.y < WORLD.groundY + 20);
 
-  // ---- lightning: strikes at a random x on its own timer ----
+  // ---- lightning: strikes at a random x within view, on its own timer ----
   const lg = w.lightning;
   if (lg) {
     lg.timer -= dt;
     if (lg.timer <= 0) {
-      lg.x = section.startX + Math.random() * section.width;
+      lg.x = viewLeft + Math.random() * viewSpan;
       lg.boltTimer = LIGHTNING_BOLT_DURATION;
       lg.flash = LIGHTNING_FLASH_PEAK;
       lg.timer = randomLightningInterval();
@@ -2067,7 +2101,7 @@ function draw() {
   // Purely visual/background; falls back to simple shapes if the sprites
   // haven't loaded.
   const weather = world.weather;
-  if (weather && weather.section) {
+  if (weather && weather.active) {
     // Darkened storm sky, confined to just this section's x-range, so the
     // stage visually reads as stormy and the lightning flash pops against
     // it (also makes it obvious you've actually reached L2-4).
@@ -2245,7 +2279,12 @@ function draw() {
   // ---- lightning screen flash (Level 2 / Stage 4 only) ----
   // Drawn in screen space (after ctx.restore()) so the flash covers the
   // whole viewport instantly instead of panning with the camera.
-  if (world.weather && world.weather.lightning && world.weather.lightning.flash > 0) {
+  if (
+    world.weather &&
+    world.weather.active &&
+    world.weather.lightning &&
+    world.weather.lightning.flash > 0
+  ) {
     ctx.fillStyle = `rgba(255, 255, 255, ${world.weather.lightning.flash})`;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   }
