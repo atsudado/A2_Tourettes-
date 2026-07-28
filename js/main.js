@@ -147,6 +147,7 @@ let buttonClickSound = null;
 let jumpSound = null;
 let mailboxBellSound = null;
 let birdChirpSound = null;
+let stormSound = null;
 // Level 2 / Stage 2's passing-car honk — placeholder audio file path,
 // same "safe to swap later" treatment as the sprites above.
 let carHonkSound = null;
@@ -188,6 +189,10 @@ function initAudio() {
   birdChirpSound = new Audio("assets/sounds/bird_chirp.mp3");
   birdChirpSound.volume = 0.55;
   birdChirpSound.preload = "auto";
+
+  stormSound = new Audio("assets/sounds/storm.mp3");
+  stormSound.volume = 0.6;
+  stormSound.preload = "auto";
 
   carHonkSound = new Audio("assets/sounds/car_honk.mp3");
   carHonkSound.volume = 0.5;
@@ -663,6 +668,7 @@ function updateWeather(dt) {
       // of Level 2-4, not tied to the camera/viewport.
       w.rayX =
         w.section.startX + Math.random() * (w.section.endX - w.section.startX);
+      playSound(stormSound);
       w.spawnTimer = RAY_VISIBLE_DURATION;
     }
   }
