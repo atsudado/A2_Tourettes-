@@ -568,19 +568,27 @@ function updateCarsAndNpc(dt) {
 // RAY_VISIBLE_DURATION seconds before disappearing again.
 // ------------------------------------------------------------
 
-const RAY_VISIBLE_DURATION = 0.25; // seconds the ray stays on screen
-const RAY_SPAWN_INTERVAL_MIN = 1; // seconds between flashes (min)
-const RAY_SPAWN_INTERVAL_MAX = 5; // seconds between flashes (max)
+const RAY_VISIBLE_DURATION = 0.5; // seconds the ray stays on screen
+const RAY_SPAWN_INTERVAL_MIN = 0.5; // seconds between flashes (min)
+const RAY_SPAWN_INTERVAL_MAX = 2; // seconds between flashes (max)
+const RAY_SPAWN_INTERVAL_MIN_FAST = 0.3; // faster min interval after hit
+const RAY_SPAWN_INTERVAL_MAX_FAST = 1.25; // faster max interval after hit
 
 function findStormSection() {
   return WORLD.sections.find((s) => s.storm);
 }
 
-function randomStormSpawnInterval() {
-  return (
-    RAY_SPAWN_INTERVAL_MIN +
-    Math.random() * (RAY_SPAWN_INTERVAL_MAX - RAY_SPAWN_INTERVAL_MIN)
-  );
+function randomStormSpawnInterval(w) {
+  const min = w && w.spawnIntervalMin !== undefined ? w.spawnIntervalMin : RAY_SPAWN_INTERVAL_MIN;
+  const max = w && w.spawnIntervalMax !== undefined ? w.spawnIntervalMax : RAY_SPAWN_INTERVAL_MAX;
+  return min + Math.random() * (max - min);
+}
+
+function setStormSpeedMode(w, fast = false) {
+  if (!w) return;
+  w.spawnIntervalMin = fast ? RAY_SPAWN_INTERVAL_MIN_FAST : RAY_SPAWN_INTERVAL_MIN;
+  w.spawnIntervalMax = fast ? RAY_SPAWN_INTERVAL_MAX_FAST : RAY_SPAWN_INTERVAL_MAX;
+  w.fastMode = fast;
 }
 
 // Full (re)init — called from loadWorld().
@@ -596,15 +604,18 @@ function initWeather() {
     rayVisible: false,
     rayTimer: 0, // counts down while visible, counts down to next spawn otherwise
     rayX: 0, // world-space x of the current/next flash
-    spawnTimer: randomStormSpawnInterval(),
+    spawnTimer: 0,
   };
+  setStormSpeedMode(world.weather, false);
+  world.weather.spawnTimer = randomStormSpawnInterval(world.weather);
 }
 
 // Lighter reset — called from respawnPlayer().
 function resetWeatherRunState() {
   if (!world.weather) return;
   world.weather.rayVisible = false;
-  world.weather.spawnTimer = randomStormSpawnInterval();
+  setStormSpeedMode(world.weather, world.weather.fastMode);
+  world.weather.spawnTimer = randomStormSpawnInterval(world.weather);
 }
 
 function updateWeather(dt) {
@@ -617,10 +628,31 @@ function updateWeather(dt) {
   if (!onStormSection) return;
 
   if (w.rayVisible) {
+    const rayH = VIEW_H * RAY_SCALE;
+    const rayW = (RAY_NATIVE_W / RAY_NATIVE_H) * rayH;
+    const rayX = w.rayX - rayW / 2;
+    const rayY = world.def.groundY - rayH;
+
+    if (
+      player.alive &&
+      rectsOverlap(rayX, rayY, rayW, rayH, player.x, player.y, player.w, player.h)
+    ) {
+      // Hit by the lighting ray: reset to the start of L2-4 and speed up
+      // subsequent spawns.
+      if (w.section && w.section.spawn) {
+        checkpoint = { x: w.section.spawn.x, y: w.section.spawn.y };
+      }
+      setStormSpeedMode(w, true);
+      w.rayVisible = false;
+      w.spawnTimer = randomStormSpawnInterval(w);
+      respawnPlayer();
+      return;
+    }
+
     w.spawnTimer -= dt;
     if (w.spawnTimer <= 0) {
       w.rayVisible = false;
-      w.spawnTimer = randomStormSpawnInterval();
+      w.spawnTimer = randomStormSpawnInterval(w);
     }
   } else {
     w.spawnTimer -= dt;
