@@ -2122,21 +2122,13 @@ function draw() {
       }
     }
 
-    const lg = weather.lightning;
-    if (lg && lg.boltTimer > 0) {
-      if (lightningLoaded) {
-        ctx.drawImage(
-          lightningImg,
-          lg.x - LIGHTNING_BOLT_W / 2,
-          0,
-          LIGHTNING_BOLT_W,
-          world.def.groundY,
-        );
-      } else {
-        ctx.fillStyle = "rgba(255, 245, 180, 0.9)";
-        ctx.fillRect(lg.x - LIGHTNING_BOLT_W / 4, 0, LIGHTNING_BOLT_W / 2, world.def.groundY);
-      }
-    }
+    // NOTE: the bolt sprite itself is drawn later, in screen space right
+    // alongside the flash (see "lightning bolt + screen flash" below) —
+    // not here. Drawing it here, underneath the rest of the world, meant
+    // the later full-screen white flash rect painted right over it, so a
+    // strike read as just a plain white flash with no visible ray.
+    // Drawing both together after ctx.restore(), bolt on top of the
+    // flash, is what actually keeps the ray visible during a strike.
   }
 
   // Level 2-2's background cars + NPC (with its code speech-bubble) —
@@ -2276,17 +2268,35 @@ function draw() {
 
   ctx.restore();
 
-  // ---- lightning screen flash (Level 2 / Stage 4 only) ----
-  // Drawn in screen space (after ctx.restore()) so the flash covers the
-  // whole viewport instantly instead of panning with the camera.
-  if (
-    world.weather &&
-    world.weather.active &&
-    world.weather.lightning &&
-    world.weather.lightning.flash > 0
-  ) {
-    ctx.fillStyle = `rgba(255, 255, 255, ${world.weather.lightning.flash})`;
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  // ---- lightning bolt + screen flash (Level 2 / Stage 4 only) ----
+  // Both drawn in screen space (after ctx.restore()), flash first and the
+  // bolt sprite on top of it — so the strike reads as a bright ray against
+  // a brightened sky, not just a flat white flash. (The bolt used to be
+  // drawn earlier, in world space under the rest of the level; the flash
+  // rect below then painted straight over it, hiding it completely.)
+  if (world.weather && world.weather.active && world.weather.lightning) {
+    const lg = world.weather.lightning;
+
+    if (lg.flash > 0) {
+      ctx.fillStyle = `rgba(255, 255, 255, ${lg.flash})`;
+      ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    }
+
+    if (lg.boltTimer > 0) {
+      const screenX = lg.x - camera.x;
+      if (lightningLoaded) {
+        ctx.drawImage(
+          lightningImg,
+          screenX - LIGHTNING_BOLT_W / 2,
+          0,
+          LIGHTNING_BOLT_W,
+          world.def.groundY,
+        );
+      } else {
+        ctx.fillStyle = "rgba(255, 245, 180, 0.9)";
+        ctx.fillRect(screenX - LIGHTNING_BOLT_W / 4, 0, LIGHTNING_BOLT_W / 2, world.def.groundY);
+      }
+    }
   }
 
   // ---- noise meter HUD (Level 2 / Stage 3 only) ----
