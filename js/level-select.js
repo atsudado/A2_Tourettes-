@@ -1,13 +1,11 @@
 // ============================================================
 // LEVEL SELECT — persistent stage progress + the 5x5 stage-picker
-// screen. Load this script AFTER levels.js (it reads WORLD_DEFS/
-// WORLD.sections) and BEFORE main.js (main.js calls into Progress /
-// showLevelSelect, and level-select.js calls back into main.js's
-// loadWorld()).
+// screen. Load this script AFTER levels.js (it reads WORLD.sections)
+// and BEFORE main.js (main.js calls into Progress / showLevelSelect).
 // ============================================================
 
 const SAVE_KEY = "tactic_progress_v1";
-const LEVEL_COUNT = 5; // total main levels in the finished game
+const LEVEL_COUNT = 3; // total main levels in the finished game
 const STAGES_PER_LEVEL = 5;
 
 // ---------- Persistent save data ----------
@@ -68,29 +66,26 @@ const Progress = {
     this.save();
   },
 
-  // Marks a stage completed and unlocks whatever comes next: the next
-  // stage in the same level, or stage 1 of the next level if this was
-  // that level's last stage. This runs regardless of whether the next
-  // level/stage has actually been built yet — the level-select grid
-  // separately checks each level's stageCount before letting anything be
-  // clicked, so an "unlocked" stage with no content just stays greyed out
-  // until that stage is built.
+  // Marks a stage completed and unlocks the next stage within the same
+  // level (if there is one). Rolling over into the *next level* is
+  // handled separately by bridgeUnbuiltLevels() below, since that needs
+  // to skip past any level that isn't built yet (e.g. Level 2, still in
+  // progress) rather than always assuming levelIdx + 1 is playable.
   completeStage(levelIdx, stageIdx) {
     this.load();
     const k = this.key(levelIdx, stageIdx);
     if (!this.data.completed.includes(k)) this.data.completed.push(k);
     if (!this.data.unlocked.includes(k)) this.data.unlocked.push(k);
 
-    let nextLevel = levelIdx;
-    let nextStage = stageIdx + 1;
-    if (nextStage >= STAGES_PER_LEVEL) {
-      nextLevel += 1;
-      nextStage = 0;
+    const nextStage = stageIdx + 1;
+    if (nextStage < STAGES_PER_LEVEL) {
+      this.unlock(levelIdx, nextStage);
     }
-    if (nextLevel < LEVEL_COUNT) {
-      this.unlock(nextLevel, nextStage);
-    }
+
     this.save();
+
+    // Open up whichever level is next in line to actually play.
+    bridgeUnbuiltLevels();
   },
 
   // Not wired to any button by default, but handy to have for a future
@@ -103,41 +98,68 @@ const Progress = {
 
 // ---------- World-side helpers ----------
 // Finds the mailbox object for a given level/stage so we know exactly
-// where it sits in that level's own world space. Reads straight from
-// WORLD_DEFS (the static per-level definitions) rather than the
-// currently-active `world`/`WORLD`, since the target level may not be the
-// one currently loaded (e.g. picking L2-1 while Level 1 is still active).
-// Returns undefined for stages that haven't been built yet.
+// where it sits in world space. Returns undefined for stages that
+// haven't been built yet.
 function findMailbox(levelIdx, stageIdx) {
-  const def = WORLD_DEFS[levelIdx];
-  if (!def) return undefined;
-  return def.mailboxes.find(
+  return world.mailboxes.find(
     (mb) => mb.levelIndex === levelIdx && mb.stageIndex === stageIdx,
   );
+}
+
+// Whether a specific stage (not just its level) actually exists in the
+// built WORLD. Levels can be partially built — e.g. Level 3 currently
+// only has stages 0-2 — so this checks WORLD.sections directly rather
+// than trusting builtLevelIndices, which is level-granularity only.
+function isStageBuilt(levelIdx, stageIdx) {
+  return WORLD.sections.some(
+    (s) => s.levelIndex === levelIdx && s.stageIndex === stageIdx,
+  );
+}
+
+// Whenever a level's final stage is completed, this makes sure the
+// *next playable* level gets unlocked — skipping over any level that
+// isn't built yet (e.g. Level 2, still being worked on by another team)
+// so finishing Level 1 opens Level 3 instead of dead-ending on a level
+// nobody can enter. Safe to call any time: it only ever adds unlocks,
+// never removes them, so it's idempotent and also self-heals older save
+// data that unlocked an unbuilt level under the old logic. Once Level 2
+// (or any skipped level) actually gets built, this automatically routes
+// through it again in the correct order on the next call — no changes
+// needed here when that happens.
+function bridgeUnbuiltLevels() {
+  Progress.load();
+  const lastStage = STAGES_PER_LEVEL - 1;
+
+  for (let levelIdx = 0; levelIdx < LEVEL_COUNT - 1; levelIdx++) {
+    if (!isStageBuilt(levelIdx, lastStage)) continue;
+    if (!Progress.isCompleted(levelIdx, lastStage)) continue;
+
+    for (let nextLevel = levelIdx + 1; nextLevel < LEVEL_COUNT; nextLevel++) {
+      if (isStageBuilt(nextLevel, 0)) {
+        Progress.unlock(nextLevel, 0);
+        break;
+      }
+    }
+  }
 }
 
 // Where should the player appear if they jump straight into this stage
 // from the menu? Stage 0 of a level starts at that level's first
 // section's spawn point; any later stage starts right where the
 // previous stage's mailbox was (mirroring how respawning at a
-// checkpoint already works). Always resolved against the *target*
-// level's own definition, not whichever level happens to be loaded right
-// now.
+// checkpoint already works).
 function getStageEntryPoint(levelIdx, stageIdx) {
-  const def = WORLD_DEFS[levelIdx];
-  if (!def) return WORLD.spawn;
-
   if (stageIdx === 0) {
-    const firstSection = def.sections.find(
+    const firstSection = WORLD.sections.find(
       (s) => s.levelIndex === levelIdx && s.stageIndex === 0,
     );
-    return firstSection ? firstSection.spawn : def.spawn;
+    return firstSection ? firstSection.spawn : WORLD.spawn;
   }
   const prevMb = findMailbox(levelIdx, stageIdx - 1);
-  if (!prevMb) return def.spawn;
+  if (!prevMb) return WORLD.spawn;
   return {
     x: prevMb.x,
-    y: prevMb.y !== undefined ? prevMb.y : def.groundY - prevMb.height,
+    y: prevMb.y !== undefined ? prevMb.y : world.def.groundY - prevMb.height,
   };
 }
 
@@ -151,23 +173,15 @@ function syncMailboxActivationFromProgress() {
   }
 }
 
-function resetMailboxStatesForRun() {
-  if (!world || !world.mailboxes) return;
-  for (const mb of world.mailboxes) {
-    mb.activated = false;
-  }
-}
-
 // Jumps straight into a specific stage, as if the player had just hit
-// the checkpoint before it. If this stage belongs to a different level
-// than the one currently loaded, loadWorld() fully swaps the active
-// world (its own map, ground, hazards, birds, etc.) rather than reusing
-// whatever's currently in memory — levels don't share a coordinate
-// space, so there's no walking back into a previous level's map.
+// the checkpoint before it. Reuses respawnPlayer()'s existing hazard
+// resets (traps, moving platforms, the blink cycle, ducks/bubbles/NPCs)
+// so nothing carries over strangely from wherever the player was before.
 function startStage(levelIdx, stageIdx) {
   playGameplayMusic();
-  const entry = getStageEntryPoint(levelIdx, stageIdx);
-  loadWorld(levelIdx, entry);
+  checkpoint = getStageEntryPoint(levelIdx, stageIdx);
+  respawnPlayer();
+  syncMailboxActivationFromProgress();
   hideLevelSelect();
 }
 
@@ -222,25 +236,38 @@ function stageButtonLabel(levelIdx, stageIdx) {
 // Rebuilds all 25 cells from the current saved progress. Cheap enough
 // to just rebuild in full every time the screen is opened.
 function refreshLevelSelectGrid(grid) {
+  // Self-heals any save data that predates bridgeUnbuiltLevels() (e.g. a
+  // save that unlocked Level 2 under the old always-unlock-levelIdx+1
+  // logic, back before Level 2 existed) so returning players see Level 3
+  // unlocked immediately, without needing to re-complete Level 1.
+  bridgeUnbuiltLevels();
+
   grid.innerHTML = "";
 
   for (let levelIdx = 0; levelIdx < LEVEL_COUNT; levelIdx++) {
-    // Stages with no content yet stay locked no matter what Progress
-    // says — e.g. finishing L1-5 unlocks "2-0" in the save so it's ready
-    // the moment L2-1 ships (which it now has), but L2-2 through L2-5
-    // stay greyed out until those are built too, same idea.
-    const levelDef = WORLD_DEFS[levelIdx];
-    const stageCount = levelDef ? levelDef.stageCount : 0;
-
     for (let stageIdx = 0; stageIdx < STAGES_PER_LEVEL; stageIdx++) {
-      const built = stageIdx < stageCount;
       const btn = document.createElement("button");
       btn.textContent = stageButtonLabel(levelIdx, stageIdx);
       btn.dataset.level = levelIdx;
       btn.dataset.stage = stageIdx;
 
-      const completed = built && Progress.isCompleted(levelIdx, stageIdx);
-      const unlocked = built && Progress.isUnlocked(levelIdx, stageIdx);
+      // Per-stage build check — a level can be partially built (e.g.
+      // Level 3 currently only has stages 0-2), so stages 3/4 of a
+      // partially-built level stay locked even though earlier stages in
+      // that same level are playable today.
+      const built = isStageBuilt(levelIdx, stageIdx);
+
+      // Team pivot: only Level 3 (index 2) is being worked on right now,
+      // so Levels 1 & 2 are forced locked/unselectable here regardless of
+      // build status or saved progress. Flip this off once those levels
+      // are ready to be playable again.
+      const ONLY_SELECTABLE_LEVEL = 2;
+      const levelSelectable = levelIdx === ONLY_SELECTABLE_LEVEL;
+
+      const completed =
+        levelSelectable && built && Progress.isCompleted(levelIdx, stageIdx);
+      const unlocked =
+        levelSelectable && built && Progress.isUnlocked(levelIdx, stageIdx);
 
       // Every stage cell uses the same levelbox.png art (see
       // .level-stage-btn in style.css); state is communicated with a

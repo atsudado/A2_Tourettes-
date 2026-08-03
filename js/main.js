@@ -12,8 +12,7 @@ const VIEW_H = 720;
 const GRAVITY = 1800; // px/s^2
 const JUMP_VELOCITY = -680; // px/s
 const MOVE_SPEED = 320; // px/s
-// Sneak speed: held with "H" to move quietly (see Level 2 / Stage 3's gravel
-// footstep sound). Slower than normal walking — the tradeoff for silence.
+// Level 2 / Stage 3's gravel: hold "H" to move quietly, at the cost of speed.
 const SNEAK_SPEED = 140; // px/s
 const FRICTION_GROUND = 0.0; // (instant accel model, kept for tuning)
 const PLAYER_W = 28;
@@ -25,27 +24,39 @@ let world = null; // the one continuous map (mutable runtime state)
 let checkpoint = { x: 0, y: 0 }; // latest activated mailbox (or the world start)
 let player = null;
 let camera = { x: 0 };
-let keys = { left: false, right: false, up: false, slow: false };
+let keys = { left: false, right: false, up: false, t: false, slow: false };
 let lastTime = null;
 let gameTime = 0;
 let deathFlashTimer = 0;
 let hazardSpawner = null; // interval ID(s) for the dynamic Stage 1 hazards (array)
 let isPaused = false;
 // Seconds remaining on a bird-chirp freeze (Level 2) — while > 0, all
-// player controls are locked. Reset to 0 whenever the world (re)loads.
+// player controls are locked.
 let freezeTimer = 0;
 const BIRD_FREEZE_DURATION = 1.5;
-
-// ---- noise meter (Level 2 / Stage 3's gravel) ----
-// Fills while the player walks on gravel without sneaking (see the
-// gravel-footstep block in update()); drains while quiet (standing still,
-// sneaking with "H", or on any other surface). Reaching NOISE_MAX kills the
-// player, same as any other hazard. Only ever shown/ticked on that one
-// stage — see the `onGravelStage` checks in update()/draw() below.
+// Level 2 / Stage 3's noise meter — fills while walking noisily on gravel,
+// drains while quiet; reaching NOISE_MAX kills the player.
 let noiseLevel = 0;
 const NOISE_MAX = 100;
-const NOISE_RATE_UP = 38; // meter units/sec while noisy
-const NOISE_RATE_DOWN = 22; // meter units/sec while quiet
+const NOISE_RATE_UP = 38;
+const NOISE_RATE_DOWN = 22;
+
+// Per-level x-extent (min startX / max endX across that level's stages),
+// used to pick and stretch the right backdrop image (BG.png / BG3.png)
+// over just that level's stretch of the merged map, instead of one
+// image stretched across the whole world.
+const LEVEL_EXTENTS = (() => {
+  const map = {};
+  for (const s of WORLD.sections) {
+    if (!map[s.levelIndex]) {
+      map[s.levelIndex] = { start: s.startX, end: s.endX };
+    } else {
+      map[s.levelIndex].start = Math.min(map[s.levelIndex].start, s.startX);
+      map[s.levelIndex].end = Math.max(map[s.levelIndex].end, s.endX);
+    }
+  }
+  return map;
+})();
 
 const overlay = document.getElementById("overlay");
 const overlayTitle = document.getElementById("overlay-title");
@@ -55,14 +66,23 @@ const levelLabel = document.getElementById("level-label");
 const controlsHint = document.getElementById("controls-hint");
 const DEFAULT_CONTROLS_HINT =
   "← → move &nbsp;|&nbsp; ↑ / Space jump &nbsp;|&nbsp; Esc menu";
-// Level 2 / Stage 3's gravel: mention the sneak key only while the player
-// is actually on that stage, so the hint elsewhere doesn't reference a
-// mechanic that doesn't apply there.
 const GRAVEL_CONTROLS_HINT =
   "← → move &nbsp;|&nbsp; ↑ / Space jump &nbsp;|&nbsp; Hold H to sneak &nbsp;|&nbsp; Esc menu";
+// Level 2 / Stage 5's ('Bark Back') barking dogs: the hint swaps between
+// these two depending on the current bark phase — see updateLevelLabel().
+const BARK_CONTROLS_HINT_QUIET =
+  "← → move &nbsp;|&nbsp; ↑ / Space jump &nbsp;|&nbsp; Dogs are quiet — for now &nbsp;|&nbsp; Esc menu";
+const BARK_CONTROLS_HINT_INVERTED =
+  "BARKING — controls reversed! &nbsp;|&nbsp; ↑ / Space jump &nbsp;|&nbsp; Esc menu";
+// How long before the dogs start barking (Level 2 / Stage 5) the red
+// warning text shows, telegraphing the control-flip just like the storm
+// and bird warnings telegraph theirs.
+const BARK_WARN_LEAD = 0.6;
 const restartBtn = document.getElementById("restart-btn");
+const muteBtn = document.getElementById("mute-btn");
+muteBtn.addEventListener("click", () => setMusicMuted(!musicMuted));
 
-const BOX_SRC = "assets/images/box.png";
+const BOX_SRC = "assets/images/2box.png";
 const DOG_SRC = "assets/images/dog.png";
 const HAZARD_W = 79;
 const HAZARD_H = 56;
@@ -95,39 +115,59 @@ const whitedogImg = new Image();
 whitedogImg.src = WHITEDOG_SRC;
 let whitedogLoaded = false;
 
-// Level 2's decorative trees, plus the birds perched in them (see
-// TREE_DRAW_W/BIRD_DRAW_W etc. and birdOnTree() in level2.js). Each has
-// its own sprite.
+const DUCK_SRC = "assets/images/duck.png";
+const duckImg = new Image();
+duckImg.src = DUCK_SRC;
+let duckLoaded = false;
+
+const BUBBLE_SRC = "assets/images/speechbubble.png";
+const bubbleImg = new Image();
+bubbleImg.src = BUBBLE_SRC;
+let bubbleLoaded = false;
+
+// Stage 4's pushing NPCs
+const NPC_SRC = "assets/images/businessman.png";
+const npcImg = new Image();
+npcImg.src = NPC_SRC;
+let npcLoaded = false;
+
+// Level 3 / Stage 5's truck obstacle
+const TRUCK_SRC = "assets/images/truck.png";
+const truckImg = new Image();
+truckImg.src = TRUCK_SRC;
+let truckLoaded = false;
+
+// Level 2's decorative trees + perched birds.
 const TREE_SRC = "assets/images/tree.png";
 const treeImg = new Image();
 treeImg.src = TREE_SRC;
 let treeLoaded = false;
-
 const BIRD_SRC = "assets/images/bird.png";
 const birdImg = new Image();
 birdImg.src = BIRD_SRC;
 let birdImgLoaded = false;
 
-// Level 2 / Stage 4's ("Static") random lightning-ray flashes — see
-// findStormSection()/initWeather()/updateWeather()/drawWeather() below.
+// Level 2 / Stage 4's ("Static") lightning-ray flashes.
 const RAY_SRC = "assets/images/ray.png";
 const rayImg = new Image();
 rayImg.src = RAY_SRC;
 let rayLoaded = false;
+// Ambient rain drawn across the same storm zone as the lightning —
+// purely decorative, no collision.
+const RAIN_SRC = "assets/images/rain.png";
+const rainImg = new Image();
+rainImg.src = RAIN_SRC;
+let rainLoaded = false;
 
-// Level 2 / Stage 2's NPC and background cars — PLACEHOLDER ART.
-// Swap these two path strings (and drop the matching files into
-// assets/images/) to bring in the final sprites; nothing else needs to
-// change since every draw call below already falls back to a flat-color
-// rectangle if the image fails to load, same pattern as every other
-// sprite in the game.
-const NPC_PLACEHOLDER_SRC = "assets/images/npc_placeholder.png";
-const CAR_PLACEHOLDER_SRC = "assets/images/car_placeholder.png";
-const npcImg = new Image();
-npcImg.src = NPC_PLACEHOLDER_SRC;
-let npcLoaded = false;
+// Level 2 / Stage 2's code-lock NPC (businessman.png, same art as Stage
+// 4's pushing NPCs) and its background cars (car.png).
+const CODE_NPC_SRC = "assets/images/businessman.png";
+const codeNpcImg = new Image();
+codeNpcImg.src = CODE_NPC_SRC;
+let codeNpcLoaded = false;
+const CAR_SRC = "assets/images/car.png";
 const carImg = new Image();
-carImg.src = CAR_PLACEHOLDER_SRC;
+carImg.src = CAR_SRC;
 let carLoaded = false;
 
 const SPRITE_SHEET_SRC = "assets/images/mailman.png";
@@ -148,16 +188,20 @@ let jumpSound = null;
 let mailboxBellSound = null;
 let birdChirpSound = null;
 let stormSound = null;
-// Level 2 / Stage 2's passing-car honk — placeholder audio file path,
-// same "safe to swap later" treatment as the sprites above.
+// Level 2 / Stage 4's ambient rain flicker — no dedicated rain audio
+// asset yet, so this stays a safe no-op (start/stop on an Audio with no
+// src silently does nothing) until real audio is dropped in at this path.
+let rainSound = null;
 let carHonkSound = null;
-// Level 2 / Stage 3's gravel footstep loop — looped while the player is
-// grounded, moving, and standing on a "gravel" ground segment (see the
-// gravel-footstep block in update() below). Unlike the one-shot sounds above, this one
-// is started/stopped rather than replayed from the top each call, so the
-// footstep loop keeps its own place instead of restarting every frame.
+// Level 2 / Stage 3's gravel footstep loop — started/stopped rather than
+// replayed from the top, so it doesn't stutter every frame the player walks.
 let gravelFootstepsSound = null;
+// Level 2 / Stage 5's ('Bark Back') barking-dog loop — no dedicated audio
+// asset yet, so this stays a safe no-op (start/stop on an Audio with no
+// src silently does nothing) until real audio is dropped in at this path.
+let dogBarkSound = null;
 let audioInitialized = false;
+let musicMuted = false;
 
 function initAudio() {
   if (audioInitialized) return;
@@ -194,14 +238,73 @@ function initAudio() {
   stormSound.volume = 0.6;
   stormSound.preload = "auto";
 
-  carHonkSound = new Audio("assets/sounds/car_honk.mp3");
+  rainSound = new Audio();
+  rainSound.volume = 0.4;
+
+  // No dedicated car-honk audio yet — playCarHonkSound() stays a safe
+  // no-op (playSound() on an Audio with no src silently does nothing)
+  // until real audio is dropped in at this path.
+  carHonkSound = new Audio();
   carHonkSound.volume = 0.5;
-  carHonkSound.preload = "auto";
 
   gravelFootstepsSound = new Audio("assets/sounds/gravel_footsteps.mp3");
   gravelFootstepsSound.loop = true;
   gravelFootstepsSound.volume = 0.5;
   gravelFootstepsSound.preload = "auto";
+
+  dogBarkSound = new Audio();
+  dogBarkSound.loop = true;
+  dogBarkSound.volume = 0.55;
+
+  menuMusic.muted = musicMuted;
+  gameplayMusic.muted = musicMuted;
+}
+
+function playBirdChirpSound() {
+  playSound(birdChirpSound);
+}
+
+function playCarHonkSound() {
+  initAudio();
+  playSound(carHonkSound);
+}
+
+function startGravelFootsteps() {
+  if (!gravelFootstepsSound) return;
+  if (gravelFootstepsSound.paused) {
+    const p = gravelFootstepsSound.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  }
+}
+
+function stopGravelFootsteps() {
+  if (!gravelFootstepsSound) return;
+  if (!gravelFootstepsSound.paused) gravelFootstepsSound.pause();
+}
+
+// Starts/stops the barking-dog loop (Level 2-5 / "Bark Back"). Same
+// non-rewinding play/pause pattern as start/stopGravelFootsteps() above —
+// it should hold steady for the length of a barking phase, not restart
+// every frame it's called.
+function startDogBarkLoop() {
+  if (!dogBarkSound) return;
+  if (dogBarkSound.paused) {
+    const p = dogBarkSound.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  }
+}
+
+function stopDogBarkLoop() {
+  if (!dogBarkSound) return;
+  if (!dogBarkSound.paused) dogBarkSound.pause();
+}
+
+function setMusicMuted(muted) {
+  musicMuted = muted;
+  if (menuMusic) menuMusic.muted = muted;
+  if (gameplayMusic) gameplayMusic.muted = muted;
+  muteBtn.classList.toggle("muted", muted);
+  muteBtn.title = muted ? "Unmute Music" : "Mute Music";
 }
 
 function playSound(sound) {
@@ -268,42 +371,6 @@ function playMailboxBellSound() {
   playSound(mailboxBellSound);
 }
 
-function playBirdChirpSound() {
-  playSound(birdChirpSound);
-}
-
-function playCarHonkSound() {
-  initAudio();
-  playSound(carHonkSound);
-}
-
-// Starts/stops the gravel footstep loop. Deliberately NOT built on top of
-// playSound() — playSound() always rewinds to 0, which is right for a
-// one-shot cue (a jump, a bell) but would make a continuous walking loop
-// stutter back to its start every single frame it's called. Here we only
-// call .play() the moment the loop was actually paused, and .pause()
-// the moment it should stop, so the loop just keeps running/holding as
-// long as the player keeps walking on gravel.
-function startGravelFootsteps() {
-  if (!gravelFootstepsSound) return;
-  if (gravelFootstepsSound.paused) {
-    const playPromise = gravelFootstepsSound.play();
-    if (playPromise && typeof playPromise.catch === "function") {
-      playPromise.catch(() => {
-        // autoplay blocked before any user gesture; the next real
-        // keydown/click will let update() try again naturally.
-      });
-    }
-  }
-}
-
-function stopGravelFootsteps() {
-  if (!gravelFootstepsSound) return;
-  if (!gravelFootstepsSound.paused) {
-    gravelFootstepsSound.pause();
-  }
-}
-
 function preloadSprite() {
   return new Promise((resolve) => {
     spriteSheet.onload = () => {
@@ -330,20 +397,33 @@ function preloadSprite() {
 // "down" to show the stage has been passed.
 const MAILBOX_UP_SRC = "assets/images/mailboxup.png";
 const MAILBOX_DOWN_SRC = "assets/images/mailboxdown.png";
-// BG.png is one continuous 6400x720 backdrop — exactly the width of the
-// whole 5-stage map (5 x 1280) — so it's drawn once in world space and
-// pans naturally with the camera instead of sitting fixed to the screen.
+// BG.png is one continuous backdrop drawn once in world space and
+// stretched to world.def.width so it pans naturally with the camera
+// instead of sitting fixed to the screen. NOTE: with Level 3 merged in,
+// world.def.width now spans both Level 1 and Level 3's stages — BG.png
+// as it exists today only actually depicts Level 1's stretch of the
+// map, so it will render stretched/distorted across the extra width
+// until a wider background (or a per-level background) is added.
 const LEVEL_BG_SRC = "assets/images/BG.png";
+// Level 3 gets its own separate backdrop (BG3.png) so it reads as a
+// distinct space rather than a continuation of Level 1's map.
+const LEVEL3_BG_SRC = "assets/images/BG3.png";
 const TITLE_BG_SRC = "assets/images/titlebg.png";
+// Level 2 gets its own backdrop (BG2.png) so it reads as a distinct space.
+const LEVEL2_BG_SRC = "assets/images/BG2.png";
 
 const mailboxUpImg = new Image();
 const mailboxDownImg = new Image();
 const levelBgImg = new Image();
+const level2BgImg = new Image();
+const level3BgImg = new Image();
 const titleBgImg = new Image();
 
 let mailboxUpLoaded = false;
 let mailboxDownLoaded = false;
 let levelBgLoaded = false;
+let level2BgLoaded = false;
+let level3BgLoaded = false;
 let titleBgLoaded = false;
 
 function preloadImage(img, src, onDone) {
@@ -371,16 +451,23 @@ function preloadAllAssets() {
       (ok) => (mailboxDownLoaded = ok),
     ),
     preloadImage(levelBgImg, LEVEL_BG_SRC, (ok) => (levelBgLoaded = ok)),
+    preloadImage(level2BgImg, LEVEL2_BG_SRC, (ok) => (level2BgLoaded = ok)),
+    preloadImage(level3BgImg, LEVEL3_BG_SRC, (ok) => (level3BgLoaded = ok)),
     preloadImage(titleBgImg, TITLE_BG_SRC, (ok) => (titleBgLoaded = ok)),
     preloadImage(boxImg, BOX_SRC, (ok) => (boxLoaded = ok)),
     preloadImage(dogImg, DOG_SRC, (ok) => (dogLoaded = ok)),
     preloadImage(box2Img, BOX2_SRC, (ok) => (box2Loaded = ok)),
     preloadImage(whitedogImg, WHITEDOG_SRC, (ok) => (whitedogLoaded = ok)),
+    preloadImage(npcImg, NPC_SRC, (ok) => (npcLoaded = ok)),
+    preloadImage(truckImg, TRUCK_SRC, (ok) => (truckLoaded = ok)),
+    preloadImage(duckImg, DUCK_SRC, (ok) => (duckLoaded = ok)),
+    preloadImage(bubbleImg, BUBBLE_SRC, (ok) => (bubbleLoaded = ok)),
     preloadImage(treeImg, TREE_SRC, (ok) => (treeLoaded = ok)),
     preloadImage(birdImg, BIRD_SRC, (ok) => (birdImgLoaded = ok)),
-    preloadImage(npcImg, NPC_PLACEHOLDER_SRC, (ok) => (npcLoaded = ok)),
-    preloadImage(carImg, CAR_PLACEHOLDER_SRC, (ok) => (carLoaded = ok)),
     preloadImage(rayImg, RAY_SRC, (ok) => (rayLoaded = ok)),
+    preloadImage(rainImg, RAIN_SRC, (ok) => (rainLoaded = ok)),
+    preloadImage(codeNpcImg, CODE_NPC_SRC, (ok) => (codeNpcLoaded = ok)),
+    preloadImage(carImg, CAR_SRC, (ok) => (carLoaded = ok)),
   ]);
 }
 
@@ -397,6 +484,15 @@ function makePlayer(spawn) {
     facing: 1,
     alive: true,
     standingTrapId: null,
+    // Level 3 / Stage 1 (duck followers): brief invulnerability window
+    // after a hit, and the temporary slow it inflicts.
+    invulnTimer: 0,
+    slowTimer: 0,
+    slowFactor: 1,
+    // Level 3 / Stage 5 (jump-boost NPCs): temporary higher jump after
+    // fully charging near one of the stage's supportive NPCs.
+    jumpBoostTimer: 0,
+    jumpBoostMultiplier: 1,
   };
 }
 
@@ -413,36 +509,338 @@ function freshTrapState() {
   }));
 }
 
+// ---------- Level 3 / Stage 1 — duck followers ----------
+// Ducks are already present in the world from the moment the stage
+// loads (no walk-triggered spawn-in), and are confined to their own
+// stage's x-range so they can't be dragged across the mailbox into
+// Stage 2.
+function freshDuckState() {
+  return (WORLD.duckFollowers || []).map((d) => {
+    const section = WORLD.sections.find(
+      (s) => s.levelIndex === d.levelIndex && s.stageIndex === d.stageIndex,
+    );
+    // Clamp to just before the stage's own mailbox (not the full stage
+    // width) so ducks stop right at the border instead of continuing
+    // into Stage 2.
+    const mailbox = WORLD.mailboxes.find(
+      (m) => m.levelIndex === d.levelIndex && m.stageIndex === d.stageIndex,
+    );
+    const rightLimit = mailbox
+      ? mailbox.x - DUCK_W
+      : section
+        ? section.endX - DUCK_W
+        : Infinity;
+    return {
+      ...d,
+      active: true,
+      curX: d.x,
+      curY: null, // set on first update, once world.def.groundY is guaranteed to exist
+      facing: 1,
+      minX: section ? section.startX : -Infinity,
+      maxX: rightLimit,
+    };
+  });
+}
+
+// ---------- Stage 4 — pushing NPCs ----------
+function freshPushingNpcState() {
+  return (WORLD.pushingNpcs || []).map((n) => {
+    const section = WORLD.sections.find(
+      (s) => s.levelIndex === n.levelIndex && s.stageIndex === n.stageIndex,
+    );
+    // Patrol the entire stage — never past its own mailbox on the right,
+    // nor before the stage's start (the previous stage's mailbox) on
+    // the left.
+    const mailbox = WORLD.mailboxes.find(
+      (m) => m.levelIndex === n.levelIndex && m.stageIndex === n.stageIndex,
+    );
+    const leftLimit = section ? section.startX : -Infinity;
+    const rightLimit = mailbox
+      ? mailbox.x - PUSHING_NPC_W
+      : section
+        ? section.endX - PUSHING_NPC_W
+        : Infinity;
+    return {
+      ...n,
+      currentX: n.x,
+      direction: n.startDirection || 1, // 1 = right, -1 = left
+      speed: n.speed || PUSHING_NPC_SPEED,
+      pauseTimer: 0,
+      minX: leftLimit,
+      maxX: rightLimit,
+    };
+  });
+}
+
+// ---------- Level 3 / Stage 2 — falling dialogue bubbles ----------
+function freshBubbleState() {
+  return (WORLD.bubbles || []).map((b) => ({
+    ...b,
+    caught: false,
+    missed: false,
+    curX: b.x,
+    curY: b.spawnY,
+  }));
+}
+
+// ---------- Level 3 / Stage 3 — supportive NPCs ----------
+function freshNpcState() {
+  return (WORLD.supportNPCs || []).map((n) => ({
+    ...n,
+    charge: 0,
+    boostTimer: 0,
+  }));
+}
+
+// ---------- Level 3 / Stage 5 — jump-boost NPCs ----------
+function freshJumpBoostNpcState() {
+  return (WORLD.jumpBoostNpcs || []).map((n) => ({
+    ...n,
+    charge: 0,
+    boostTimer: 0,
+  }));
+}
+
+// Builds the one continuous map from scratch. Called once at startup and
+// again when the player returns to the main menu (a full game reset).
+function loadWorld() {
+  world = {
+    def: WORLD,
+    trapState: freshTrapState(),
+    movingPlatforms: WORLD.movingPlatforms.map((p) => ({ ...p })),
+    // Patrolling ground hazards (e.g. Stage 5's hedge dogs) — mutable
+    // copies just like movingPlatforms, since they need their own
+    // `currentX` written in every frame.
+    groundHazards: (WORLD.groundHazards || []).map((g) => ({ ...g })),
+    // mutable copies so `activated` can flip on without touching WORLD
+    mailboxes: WORLD.mailboxes.map((m) => ({ ...m })),
+    // Level 3's social mechanics — mutable per-run state.
+    duckState: freshDuckState(),
+    bubbleState: freshBubbleState(),
+    npcState: freshNpcState(),
+    // Level 3 / Stage 5's jump-boost NPCs
+    jumpBoostState: freshJumpBoostNpcState(),
+    // Stage 4's pushing NPCs
+    pushingNpcState: freshPushingNpcState(),
+    speedFactor: 1,
+    // Level 2+'s perched birds — mutable copies, each with its own
+    // countdown to its next chirp.
+    birdState: (WORLD.birds || []).map((b) => ({
+      ...b,
+      chirpTimer: INITIAL_BIRD_CHIRP_DELAY,
+    })),
+  };
+
+  // Restore each checkpoint's activated/glow state from the saved
+  // Progress (level-select.js) rather than always starting blank, so
+  // returning to the main menu doesn't visually "forget" cleared stages.
+  syncMailboxActivationFromProgress();
+
+  checkpoint = { x: WORLD.spawn.x, y: WORLD.spawn.y };
+  player = makePlayer(checkpoint);
+  camera.x = clampCamera(player.x + player.w / 2);
+  updateLevelLabel();
+
+  // ensure input state is reset and clear pause state
+  keys.left = keys.right = keys.up = keys.slow = false;
+  isPaused = false;
+  freezeTimer = 0;
+  noiseLevel = 0;
+  const menuBtn = document.getElementById("overlay-menu-btn");
+  if (menuBtn) menuBtn.remove();
+  hideKeypad();
+  stopDogBarkLoop();
+
+  if (hazardSpawner !== null) {
+    // hazardSpawner is now an array of interval IDs (one per dynamic dog)
+    for (const id of hazardSpawner) clearInterval(id);
+    hazardSpawner = null;
+  }
+
+  initDynamicHazard();
+  initGapExpansion();
+  initCodeLock();
+  initWeather();
+  initBarkState();
+}
+
+// Puts the player back at the latest checkpoint and resets the map's
+// resettable hazards (falling traps, the expanding gap, ducks/bubbles/
+// NPCs) without touching already-activated mailboxes — checkpoints,
+// once reached, stay reached.
+function respawnPlayer() {
+  world.trapState = freshTrapState();
+  world.movingPlatforms = WORLD.movingPlatforms.map((p) => ({ ...p }));
+  world.groundHazards = (WORLD.groundHazards || []).map((g) => ({ ...g }));
+  world.duckState = freshDuckState();
+  world.bubbleState = freshBubbleState();
+  world.npcState = freshNpcState();
+  world.jumpBoostState = freshJumpBoostNpcState();
+  world.pushingNpcState = freshPushingNpcState();
+  world.speedFactor = 1;
+  world.birdState = (WORLD.birds || []).map((b) => ({
+    ...b,
+    chirpTimer: INITIAL_BIRD_CHIRP_DELAY,
+  }));
+  freezeTimer = 0;
+  noiseLevel = 0;
+  hideKeypad();
+
+  if (hazardSpawner !== null) {
+    // hazardSpawner is now an array of interval IDs (one per dynamic dog)
+    for (const id of hazardSpawner) clearInterval(id);
+    hazardSpawner = null;
+  }
+  initDynamicHazard();
+  initGapExpansion();
+  resetCodeLockRunState();
+  resetWeatherRunState();
+  resetBarkRunState();
+
+  player = makePlayer(checkpoint);
+  camera.x = clampCamera(player.x + player.w / 2);
+  keys.left = keys.right = keys.up = keys.slow = false;
+}
+
+// The old dynamic red-cube hazard from "Stage 1" — kept scoped to that
+// section's stretch of the map, since it was only ever meant to threaten
+// that part of the level. Now spawns DYNAMIC_HAZARD_COUNT of these dogs
+// at once (2, per the "two running total" ask) instead of just one, each
+// teleporting to a new spot on its own independent timer so they don't
+// blink in sync.
+const DYNAMIC_HAZARD_COUNT = 2;
+
+function initDynamicHazard() {
+  const section = WORLD.sections[0];
+  const doorForSection = world.mailboxes[0];
+  const hw = HAZARD_W;
+  const hh = HAZARD_H;
+  const minGapPlayer = 200; // avoid spawning too close to player center
+  const minGapDoor = 180; // avoid spawning too close to mailbox center
+  const minGapOtherHazard = 160; // avoid spawning on top of the other dog
+  const leftBound = section.startX;
+  const rightBound = Math.max(section.startX, section.endX - hw);
+
+  // `avoidIndex` lets each hazard's picker steer clear of every *other*
+  // currently-placed dynamic hazard (not itself).
+  const pickX = (avoidIndex) => {
+    let attempts = 0;
+    while (attempts < 50) {
+      const nx =
+        Math.floor(Math.random() * (rightBound - leftBound + 1)) + leftBound;
+      const hazardCenter = nx + hw / 2;
+      const playerCenter = player.x + player.w / 2;
+      const doorCenter = doorForSection.x + doorForSection.width / 2;
+      const clearsOthers = world.dynamicHazards.every((h, i) => {
+        if (i === avoidIndex || !h) return true;
+        return Math.abs(hazardCenter - (h.x + hw / 2)) >= minGapOtherHazard;
+      });
+      if (
+        Math.abs(hazardCenter - playerCenter) >= minGapPlayer &&
+        Math.abs(hazardCenter - doorCenter) >= minGapDoor &&
+        clearsOthers
+      ) {
+        return nx;
+      }
+      attempts++;
+    }
+    // fallback if we couldn't find a spot after many attempts
+    return Math.floor(Math.random() * (rightBound - leftBound + 1)) + leftBound;
+  };
+
+  // sprite: "dog" — Stage 1's hazards render as dog.png instead of
+  // box.png (same size/mechanics, just a different look for this stage).
+  world.dynamicHazards = [];
+  for (let i = 0; i < DYNAMIC_HAZARD_COUNT; i++) {
+    world.dynamicHazards.push({
+      x: pickX(i),
+      width: hw,
+      height: hh,
+      sprite: "dog",
+    });
+  }
+
+  hazardSpawner = [];
+  for (let i = 0; i < DYNAMIC_HAZARD_COUNT; i++) {
+    // Stagger each dog's retimer slightly so the two don't teleport in
+    // lockstep.
+    const intervalMs = 1500 + i * 200;
+    hazardSpawner.push(
+      setInterval(() => {
+        if (!world || !world.dynamicHazards) return;
+        const oldX = world.dynamicHazards[i]
+          ? world.dynamicHazards[i].x
+          : -9999;
+        let nx = pickX(i);
+        // avoid trivial repeats
+        let attempts = 0;
+        while (Math.abs(nx - oldX) < 8 && attempts < 8) {
+          nx = pickX(i);
+          attempts++;
+        }
+        world.dynamicHazards[i] = {
+          x: nx,
+          width: hw,
+          height: hh,
+          sprite: "dog",
+        };
+      }, intervalMs),
+    );
+  }
+}
+
+// Which section of the continuous map does world-x `x` fall inside? Drives
+// the section-specific mechanics below (the expanding gap, the blink
+// cycle, per-level movement quirks) now that multiple levels share one
+// map instead of separate pages.
+function getSectionIndexForX(x) {
+  for (let i = 0; i < WORLD.sections.length; i++) {
+    const s = WORLD.sections[i];
+    if (x >= s.startX && x < s.endX) return i;
+  }
+  return WORLD.sections.length - 1;
+}
+
+// Convenience wrapper around getSectionIndexForX() for code that wants
+// the section object itself (levelIndex/stageIndex/baseSpeedFactor/etc)
+// rather than just its raw index.
+function getCurrentSection() {
+  return WORLD.sections[getSectionIndexForX(player.x)];
+}
+
+function updateLevelLabel() {
+  const idx = getSectionIndexForX(player.x);
+  levelLabel.textContent = WORLD.sections[idx].title.split("—")[0].trim();
+
+  // Swap in the sneak-key hint only while standing on gravel ground
+  // (Level 2 / Stage 3); every other stage keeps the default hint.
+  if (controlsHint) {
+    const onGravel = getGroundSurfaceAt(player.x) === "gravel";
+    const bs = world.barkState;
+    const onBarkStage = bs && getCurrentSection() === bs.section;
+    if (onBarkStage) {
+      controlsHint.innerHTML =
+        bs.phase === "barking"
+          ? BARK_CONTROLS_HINT_INVERTED
+          : BARK_CONTROLS_HINT_QUIET;
+    } else {
+      controlsHint.innerHTML = onGravel
+        ? GRAVEL_CONTROLS_HINT
+        : DEFAULT_CONTROLS_HINT;
+    }
+  }
+}
+
 // ------------------------------------------------------------
 // Locked mailbox / code-entry keypad (Level 2-2 — "Drowned Out")
-//
-// A stage can mark one of its sections with `codeLock: true` and an
-// `npc`/`cars` config (see levels.js). When that's present:
-//  - its mailbox spawns locked (mb.locked = true) and won't complete the
-//    stage on touch until the right 4-digit code has been entered
-//  - an NPC in that section cycles a speech bubble containing a randomly
-//    generated 4-digit code
-//  - background cars drive by and occasionally honk, which stamps a
-//    "BEEP" over one or two of the bubble's digits for a moment
-//  - touching the locked mailbox opens an on-screen keypad; entering the
-//    correct code unlocks it so the next touch delivers the mail as
-//    normal (see the mailbox loop in update() and activateCheckpoint())
-//
-// Scoped the same way the Stage 1 dynamic hazard / Stage 4 gap-expansion
-// mechanics are (a lookup against the currently active WORLD.sections)
-// rather than a hardcoded level/stage index, so it keeps working
-// wherever a future `codeLock` section ends up.
 // ------------------------------------------------------------
-
-const NPC_BUBBLE_SHOW_DURATION = 3.6; // seconds the code bubble is visible
-const NPC_BUBBLE_HIDE_DURATION = 1.1; // brief pause between cycles
-const CAR_HONK_OBSCURE_DURATION = 1.0; // seconds a honked digit stays covered
+const NPC_BUBBLE_SHOW_DURATION = 3.6;
+const NPC_BUBBLE_HIDE_DURATION = 1.1;
+const CAR_HONK_OBSCURE_DURATION = 1.0;
 
 function generateRandomCode() {
   const code = [];
-  for (let i = 0; i < 4; i++) {
-    code.push(String(Math.floor(Math.random() * 10)));
-  }
+  for (let i = 0; i < 4; i++) code.push(String(Math.floor(Math.random() * 10)));
   return code;
 }
 
@@ -450,42 +848,70 @@ function findCodeLockSection() {
   return WORLD.sections.find((s) => s.codeLock && s.npc);
 }
 
-// Full (re)init — called from loadWorld(). Generates a fresh code, since
-// this only happens when the player (re)starts the stage from scratch.
+function makeStageCars(carsCfg) {
+  if (!carsCfg) return [];
+  const w = carsCfg.width || 70;
+  const h = carsCfg.height || 34;
+  const speedMin = carsCfg.speedMin || 150;
+  const speedMax = carsCfg.speedMax || 240;
+  const span = carsCfg.maxX - carsCfg.minX - w;
+  // A fixed set of cars, spread evenly across the stage, each with its
+  // own speed and starting direction — always on screen, bouncing
+  // between the stage's own boundaries instead of spawning/despawning.
+  const count = 3;
+  const cars = [];
+  for (let i = 0; i < count; i++) {
+    cars.push({
+      x: carsCfg.minX + (span * (i + 0.5)) / count,
+      y: world.def.groundY - h,
+      width: w,
+      height: h,
+      speed: speedMin + Math.random() * (speedMax - speedMin),
+      dir: i % 2 === 0 ? 1 : -1,
+    });
+  }
+  return cars;
+}
+
 function initCodeLock() {
   const section = findCodeLockSection();
   if (!section) {
     world.codeLock = null;
     return;
   }
-
+  // If this stage's checkpoint was already cleared in a prior run
+  // (tracked persistently via Progress), don't re-prompt the code
+  // puzzle — the mailbox unlocks immediately.
+  const alreadyCompleted = Progress.isCompleted(
+    section.levelIndex,
+    section.stageIndex,
+  );
   world.codeLock = {
     section,
     code: generateRandomCode(),
-    solved: false,
-    // NPC speech-cycle state
-    cyclePhase: "showing", // "showing" | "hidden"
+    solved: alreadyCompleted,
+    cyclePhase: "showing",
     cycleTimer: NPC_BUBBLE_SHOW_DURATION,
-    // per-digit seconds remaining obscured by a "BEEP" (0 = visible)
     obscured: [0, 0, 0, 0],
-    // background cars
-    cars: [],
-    spawnTimer: 0.5 + Math.random() * 1.5,
+    cars: makeStageCars(section.cars),
     honkTimer: 1 + Math.random() * 1.5,
   };
+  if (alreadyCompleted) {
+    const mb = world.mailboxes.find(
+      (m) =>
+        m.levelIndex === section.levelIndex &&
+        m.stageIndex === section.stageIndex,
+    );
+    if (mb) mb.locked = false;
+  }
 }
 
-// Lighter reset — called from respawnPlayer(). Intentionally preserves
-// `code` and `solved`: dying shouldn't erase progress the player has
-// already made on the puzzle (partially memorized digits, or an already
-// -unlocked mailbox), same spirit as checkpoints staying activated.
 function resetCodeLockRunState() {
   if (!world.codeLock) return;
   world.codeLock.cyclePhase = "showing";
   world.codeLock.cycleTimer = NPC_BUBBLE_SHOW_DURATION;
   world.codeLock.obscured = [0, 0, 0, 0];
-  world.codeLock.cars = [];
-  world.codeLock.spawnTimer = 0.5 + Math.random() * 1.5;
+  world.codeLock.cars = makeStageCars(world.codeLock.section.cars);
   world.codeLock.honkTimer = 1 + Math.random() * 1.5;
 }
 
@@ -493,7 +919,6 @@ function updateCarsAndNpc(dt) {
   const cl = world.codeLock;
   if (!cl) return;
 
-  // Speech-bubble show/hide cycle.
   cl.cycleTimer -= dt;
   if (cl.cycleTimer <= 0) {
     if (cl.cyclePhase === "showing") {
@@ -506,7 +931,6 @@ function updateCarsAndNpc(dt) {
     }
   }
 
-  // Count down any digits currently covered by a "BEEP".
   for (let i = 0; i < cl.obscured.length; i++) {
     if (cl.obscured[i] > 0) cl.obscured[i] = Math.max(0, cl.obscured[i] - dt);
   }
@@ -514,38 +938,19 @@ function updateCarsAndNpc(dt) {
   const carsCfg = cl.section.cars;
   if (!carsCfg) return;
 
-  // Spawn cars.
-  cl.spawnTimer -= dt;
-  if (cl.spawnTimer <= 0) {
-    const dir = Math.random() < 0.5 ? 1 : -1;
-    const speedMin = carsCfg.speedMin || 150;
-    const speedMax = carsCfg.speedMax || 240;
-    const w = carsCfg.width || 70;
-    const h = carsCfg.height || 34;
-    cl.cars.push({
-      x: dir === 1 ? carsCfg.minX - w : carsCfg.maxX,
-      y: carsCfg.laneY,
-      width: w,
-      height: h,
-      speed: speedMin + Math.random() * (speedMax - speedMin),
-      dir,
-    });
-    const spawnMin = carsCfg.spawnIntervalMin || 1.5;
-    const spawnMax = carsCfg.spawnIntervalMax || 3;
-    cl.spawnTimer = spawnMin + Math.random() * (spawnMax - spawnMin);
-  }
-
-  // Move + cull cars that have driven off either edge of the stretch.
   for (const car of cl.cars) {
     car.x += car.dir * car.speed * dt;
+    // Bounce off the stage's own boundaries instead of despawning, so
+    // the same cars stay on screen and keep gliding back and forth.
+    if (car.x <= carsCfg.minX) {
+      car.x = carsCfg.minX;
+      car.dir = 1;
+    } else if (car.x + car.width >= carsCfg.maxX) {
+      car.x = carsCfg.maxX - car.width;
+      car.dir = -1;
+    }
   }
-  cl.cars = cl.cars.filter(
-    (car) => car.x > carsCfg.minX - 200 && car.x < carsCfg.maxX + 200,
-  );
 
-  // Honks — only meaningful (and only obscure anything) while the bubble
-  // is actually showing; a honk with nothing on screen to cover is just
-  // a passing car.
   cl.honkTimer -= dt;
   if (cl.honkTimer <= 0) {
     const honkMin = carsCfg.honkIntervalMin || 1.2;
@@ -554,148 +959,12 @@ function updateCarsAndNpc(dt) {
 
     if (cl.cyclePhase === "showing" && cl.cars.length > 0) {
       playCarHonkSound();
-      // Cover one digit most of the time, occasionally two — enough to
-      // genuinely slow the player down without ever hiding the whole
-      // code at once.
       const numObscured = Math.random() < 0.55 ? 1 : 2;
       const order = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
       for (let i = 0; i < numObscured; i++) {
         cl.obscured[order[i]] = CAR_HONK_OBSCURE_DURATION;
       }
     }
-  }
-}
-
-// ------------------------------------------------------------
-// Level 2 / Stage 4 ("Static") — random lightning-ray flashes.
-// A background world-space visual (see drawWeather()): ray.png pops in at a
-// random x every SPAWN_INTERVAL_MIN–MAX seconds and stays visible for
-// RAY_VISIBLE_DURATION seconds before disappearing again.
-// ------------------------------------------------------------
-
-const RAY_VISIBLE_DURATION = 0.5; // seconds the ray stays on screen
-const RAY_SPAWN_INTERVAL_MIN = 0.5; // seconds between flashes (min)
-const RAY_SPAWN_INTERVAL_MAX = 2; // seconds between flashes (max)
-const RAY_SPAWN_INTERVAL_MIN_FAST = 0.3; // faster min interval after hit
-const RAY_SPAWN_INTERVAL_MAX_FAST = 1.25; // faster max interval after hit
-
-function findStormSection() {
-  return WORLD.sections.find((s) => s.storm);
-}
-
-function randomStormSpawnInterval(w) {
-  const min = w && w.spawnIntervalMin !== undefined ? w.spawnIntervalMin : RAY_SPAWN_INTERVAL_MIN;
-  const max = w && w.spawnIntervalMax !== undefined ? w.spawnIntervalMax : RAY_SPAWN_INTERVAL_MAX;
-  return min + Math.random() * (max - min);
-}
-
-function setStormSpeedMode(w, fast = false) {
-  if (!w) return;
-  w.spawnIntervalMin = fast ? RAY_SPAWN_INTERVAL_MIN_FAST : RAY_SPAWN_INTERVAL_MIN;
-  w.spawnIntervalMax = fast ? RAY_SPAWN_INTERVAL_MAX_FAST : RAY_SPAWN_INTERVAL_MAX;
-  w.fastMode = fast;
-}
-
-// Full (re)init — called from loadWorld().
-function initWeather() {
-  const section = findStormSection();
-  if (!section) {
-    world.weather = null;
-    return;
-  }
-
-  world.weather = {
-    section,
-    rayVisible: false,
-    rayTimer: 0, // counts down while visible, counts down to next spawn otherwise
-    rayX: 0, // world-space x of the current/next flash
-    spawnTimer: 0,
-  };
-  setStormSpeedMode(world.weather, false);
-  world.weather.spawnTimer = randomStormSpawnInterval(world.weather);
-}
-
-// Lighter reset — called from respawnPlayer().
-function resetWeatherRunState() {
-  if (!world.weather) return;
-  world.weather.rayVisible = false;
-  setStormSpeedMode(world.weather, world.weather.fastMode);
-  world.weather.spawnTimer = randomStormSpawnInterval(world.weather);
-}
-
-function updateWeather(dt) {
-  const w = world.weather;
-  if (!w) return;
-
-  // Only active while the player is actually on the storm section —
-  // every other stage/level never spawns rays.
-  const onStormSection = getSectionIndexForX(player.x) === w.section.stageIndex;
-  if (!onStormSection) return;
-
-  if (w.rayVisible) {
-    const rayH = VIEW_H * RAY_SCALE;
-    const rayW = (RAY_NATIVE_W / RAY_NATIVE_H) * rayH;
-    const rayX = w.rayX - rayW / 2;
-    const rayY = world.def.groundY - rayH;
-
-    if (
-      player.alive &&
-      rectsOverlap(rayX, rayY, rayW, rayH, player.x, player.y, player.w, player.h)
-    ) {
-      // Hit by the lighting ray: reset to the start of L2-4 and speed up
-      // subsequent spawns.
-      if (w.section && w.section.spawn) {
-        checkpoint = { x: w.section.spawn.x, y: w.section.spawn.y };
-      }
-      setStormSpeedMode(w, true);
-      w.rayVisible = false;
-      w.spawnTimer = randomStormSpawnInterval(w);
-      respawnPlayer();
-      return;
-    }
-
-    w.spawnTimer -= dt;
-    if (w.spawnTimer <= 0) {
-      w.rayVisible = false;
-      w.spawnTimer = randomStormSpawnInterval(w);
-    }
-  } else {
-    w.spawnTimer -= dt;
-    if (w.spawnTimer <= 0) {
-      w.rayVisible = true;
-      // Random x within the storm stage's own bounds (world space), so
-      // the ray only ever appears somewhere between the start and end
-      // of Level 2-4, not tied to the camera/viewport.
-      w.rayX =
-        w.section.startX + Math.random() * (w.section.endX - w.section.startX);
-      playSound(stormSound);
-      w.spawnTimer = RAY_VISIBLE_DURATION;
-    }
-  }
-}
-
-// World-space (not screen-space) so the ray flashes at a random spot over
-// the level's own ground instead of tracking the camera/viewport — called
-// from draw() right after the backdrop, before the trees/player, so it
-// sits behind everything as background scenery.
-const RAY_NATIVE_W = 74;
-const RAY_NATIVE_H = 367;
-const RAY_SCALE = 0.5; // 50% size, per the "too big" note
-
-function drawWeather() {
-  const w = world.weather;
-  if (!w || !w.rayVisible) return;
-
-  const rayH = VIEW_H * RAY_SCALE;
-  const rayW = (RAY_NATIVE_W / RAY_NATIVE_H) * rayH;
-  const x = w.rayX - rayW / 2;
-  const y = world.def.groundY - rayH;
-
-  if (rayLoaded) {
-    ctx.drawImage(rayImg, x, y, rayW, rayH);
-  } else {
-    ctx.fillStyle = "rgba(255, 255, 200, 0.85)";
-    ctx.fillRect(x, y, rayW, rayH);
   }
 }
 
@@ -713,13 +982,10 @@ function drawCarsAndNpc() {
   const cl = world.codeLock;
   if (!cl) return;
 
-  // Background cars.
   for (const car of cl.cars) {
     if (carLoaded) {
       ctx.save();
       if (car.dir === -1) {
-        // flip horizontally so the placeholder art faces its direction
-        // of travel
         ctx.translate(car.x + car.width, car.y);
         ctx.scale(-1, 1);
         ctx.drawImage(carImg, 0, 0, car.width, car.height);
@@ -733,18 +999,15 @@ function drawCarsAndNpc() {
     }
   }
 
-  // NPC.
   const npc = cl.section.npc;
   const npcTop = npc.y !== undefined ? npc.y : world.def.groundY - npc.height;
-  if (npcLoaded) {
-    ctx.drawImage(npcImg, npc.x, npcTop, npc.width, npc.height);
+  if (codeNpcLoaded) {
+    ctx.drawImage(codeNpcImg, npc.x, npcTop, npc.width, npc.height);
   } else {
     ctx.fillStyle = "#3a6ea5";
     ctx.fillRect(npc.x, npcTop, npc.width, npc.height);
   }
 
-  // Speech bubble — one slot per code digit; a slot shows "BEEP" instead
-  // of its digit while that digit is currently honked-over.
   if (cl.cyclePhase === "showing") {
     const bubbleW = 150;
     const bubbleH = 54;
@@ -758,7 +1021,6 @@ function drawCarsAndNpc() {
     ctx.fill();
     ctx.stroke();
 
-    // little tail pointing down toward the NPC
     ctx.beginPath();
     ctx.moveTo(bubbleX + bubbleW / 2 - 8, bubbleY + bubbleH);
     ctx.lineTo(bubbleX + bubbleW / 2 + 8, bubbleY + bubbleH);
@@ -788,7 +1050,6 @@ function drawCarsAndNpc() {
   }
 }
 
-// ---------- The on-screen keypad (opened by touching a locked mailbox) ----------
 let keypadEl = null;
 let pendingLockedMailbox = null;
 let keypadInput = "";
@@ -851,8 +1112,21 @@ function buildKeypadDOM() {
     gap: "8px",
     justifyContent: "center",
   });
-  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "Enter"];
-  for (const k of keys) {
+  const keysList = [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "⌫",
+    "0",
+    "Enter",
+  ];
+  for (const k of keysList) {
     const b = document.createElement("button");
     b.textContent = k;
     b.className = "menu-btn";
@@ -894,21 +1168,16 @@ function showKeypad() {
   keypadEl.root.style.display = "flex";
 }
 
-/*
 function hideKeypad() {
-  if (keypadEl) keypadEl.root.style.display = "none";
-  pendingLockedMailbox = null;
-}
-  */
- function hideKeypad() {
   if (keypadEl) keypadEl.root.style.display = "none";
   if (pendingLockedMailbox) pendingLockedMailbox._suppressReopen = true;
   pendingLockedMailbox = null;
 }
 
 function openKeypadForMailbox(mb) {
-  if (!world.codeLock) return; // safety net: a locked mailbox with no puzzle data
-  if (keypadEl && keypadEl.root.style.display === "flex") return; // already open
+  if (!world.codeLock) return;
+  if (world.codeLock.solved) return; // never reopen once the code is solved
+  if (keypadEl && keypadEl.root.style.display === "flex") return;
   pendingLockedMailbox = mb;
   showKeypad();
 }
@@ -934,7 +1203,6 @@ function submitKeypadCode() {
     keypadEl.feedback.style.color = "#ffb648";
     return;
   }
-
   const correct = keypadInput === world.codeLock.code.join("");
   if (correct) {
     world.codeLock.solved = true;
@@ -942,9 +1210,7 @@ function submitKeypadCode() {
     playMailboxBellSound();
     keypadEl.feedback.textContent = "Correct! The mailbox unlocks.";
     keypadEl.feedback.style.color = "#7CFF7C";
-    setTimeout(() => {
-      hideKeypad();
-    }, 700);
+    setTimeout(() => hideKeypad(), 700);
   } else {
     playButtonSound();
     keypadEl.feedback.textContent = "That's not it. Listen again.";
@@ -954,219 +1220,450 @@ function submitKeypadCode() {
   }
 }
 
-// Builds a level's map from scratch. Called at startup, when the player
-// returns to the main menu (a full reset to Level 1), and whenever the
-// level-select screen sends the player into a stage — including one in a
-// different level, in which case `levelIndex` swaps the active WORLD
-// definition entirely (its own width/ground/hazards/birds/etc.), so there
-// is no shared coordinate space a player could walk back through into a
-// previous level's map.
-function loadWorld(levelIndex = 0, spawnOverride = null) {
-  setActiveLevel(levelIndex); // reassigns the global WORLD (see levels.js)
+// ------------------------------------------------------------
+// Level 2 / Stage 4 ("Static") — alternating rain/lightning flashes.
+// Rain and lightning take turns (never both active at once): a gap,
+// then a warning icon, then the flash itself — each a single static
+// image at its exact zone (no scrolling/tiling), plus a floor marker
+// (blue for rain, yellow for lightning) so players always know where
+// each one lands.
+// ------------------------------------------------------------
+const RAY_VISIBLE_DURATION = 0.5;
+const RAIN_VISIBLE_DURATION = 1.2;
+const STORM_GAP_MIN = 1.0;
+const STORM_GAP_MAX = 2.4;
+const STORM_GAP_MIN_FAST = 0.5;
+const STORM_GAP_MAX_FAST = 1.3;
+// How long before each flash (lightning OR rain) its warning icon shows.
+const STORM_WARN_LEAD = 0.4;
+const RAY_NATIVE_W = 74;
+const RAY_NATIVE_H = 367;
+const RAY_SCALE = 0.5;
+const RAIN_NATIVE_W = 74;
+const RAIN_NATIVE_H = 367;
+const RAIN_SCALE = 0.5;
 
-  world = {
-    def: WORLD,
-    trapState: freshTrapState(),
-    movingPlatforms: WORLD.movingPlatforms.map((p) => ({ ...p })),
-    // Patrolling ground hazards (e.g. Stage 5's hedge dogs) — mutable
-    // copies just like movingPlatforms, since they need their own
-    // `currentX` written in every frame.
-    groundHazards: (WORLD.groundHazards || []).map((g) => ({ ...g })),
-    // mutable copies so `activated` (and, for a locked mailbox, `locked`)
-    // can flip on/off without touching WORLD
-    mailboxes: WORLD.mailboxes.map((m) => ({ ...m })),
-    // Level 2+'s perched birds — mutable copies since each needs its own
-    // countdown to its next chirp.
-    birdState: (WORLD.birds || []).map((b) => ({
-      ...b,
-      chirpTimer: randomBirdInterval(),
-    })),
+function findStormSection() {
+  return WORLD.sections.find((s) => s.storm);
+}
+
+function randomStormGap(w) {
+  const min = w && w.fastMode ? STORM_GAP_MIN_FAST : STORM_GAP_MIN;
+  const max = w && w.fastMode ? STORM_GAP_MAX_FAST : STORM_GAP_MAX;
+  return min + Math.random() * (max - min);
+}
+
+function setStormSpeedMode(w, fast = false) {
+  if (!w) return;
+  w.fastMode = fast;
+}
+
+function initWeather() {
+  const section = findStormSection();
+  if (!section) {
+    world.weather = null;
+    return;
+  }
+  const rainZones = section.rainZones || [];
+  const lightningZones = section.lightningZones || [];
+  const allZones = rainZones.concat(lightningZones);
+  const clusterX = allZones.length
+    ? Math.min(...allZones.map((z) => z.x))
+    : section.startX;
+  const clusterEnd = allZones.length
+    ? Math.max(...allZones.map((z) => z.x + z.width))
+    : section.endX;
+
+  world.weather = {
+    section,
+    rainZones,
+    lightningZones,
+    clusterX,
+    clusterWidth: clusterEnd - clusterX,
+    rayVisible: false,
+    rainVisible: false,
+    // Alternates "rain" / "lightning"; phase is "gap" (waiting) ->
+    // "warning" (icon shown) -> "active" (the flash itself). All rain
+    // zones fire together, and both lightning zones fire together —
+    // never a mix of the two, and never just one zone of a type.
+    stormType: "rain",
+    stormPhase: "gap",
+    fastMode: false,
   };
-
-  // Start each fresh run with mailboxes in their default up state.
-  // We only restore the saved completed-state for the current run once
-  // the player has actually passed a stage and the progress save says it
-  // should already be cleared.
-  resetMailboxStatesForRun();
-  syncMailboxActivationFromProgress();
-
-  checkpoint = spawnOverride || { x: WORLD.spawn.x, y: WORLD.spawn.y };
-  player = makePlayer(checkpoint);
-  camera.x = clampCamera(player.x + player.w / 2);
-  updateLevelLabel();
-
-  // ensure input state is reset and clear pause/freeze state
-  keys.left = keys.right = keys.up = keys.slow = false;
-  isPaused = false;
-  freezeTimer = 0;
-  noiseLevel = 0;
-  const menuBtn = document.getElementById("overlay-menu-btn");
-  if (menuBtn) menuBtn.remove();
-  hideKeypad();
-
-  if (hazardSpawner !== null) {
-    // hazardSpawner is now an array of interval IDs (one per dynamic dog)
-    for (const id of hazardSpawner) clearInterval(id);
-    hazardSpawner = null;
-  }
-
-  initDynamicHazard();
-  initGapExpansion();
-  initCodeLock();
-  initWeather();
+  world.weather.stormTimer = randomStormGap(world.weather);
 }
 
-// Puts the player back at the latest checkpoint and resets the current
-// level's resettable hazards (falling traps, the expanding gap, bird
-// chirp timers) without touching already-activated mailboxes —
-// checkpoints, once reached, stay reached. Never changes which level is
-// active; that only happens via loadWorld().
-function respawnPlayer() {
-  world.trapState = freshTrapState();
-  world.movingPlatforms = WORLD.movingPlatforms.map((p) => ({ ...p }));
-  world.groundHazards = (WORLD.groundHazards || []).map((g) => ({ ...g }));
-  world.birdState = (WORLD.birds || []).map((b) => ({
-    ...b,
-    chirpTimer: randomBirdInterval(),
-  }));
-  freezeTimer = 0;
-  noiseLevel = 0;
-  hideKeypad();
-
-  if (hazardSpawner !== null) {
-    // hazardSpawner is now an array of interval IDs (one per dynamic dog)
-    for (const id of hazardSpawner) clearInterval(id);
-    hazardSpawner = null;
-  }
-  initDynamicHazard();
-  initGapExpansion();
-  resetCodeLockRunState();
-  resetWeatherRunState();
-
-  player = makePlayer(checkpoint);
-  camera.x = clampCamera(player.x + player.w / 2);
-  keys.left = keys.right = keys.up = keys.slow = false;
+function resetWeatherRunState() {
+  if (!world.weather) return;
+  const w = world.weather;
+  w.rayVisible = false;
+  w.rainVisible = false;
+  w.stormType = "rain";
+  w.stormPhase = "gap";
+  setStormSpeedMode(w, false);
+  w.stormTimer = randomStormGap(w);
 }
 
-// The old dynamic red-cube hazard from "Stage 1" — kept scoped to that
-// section's stretch of the map, since it was only ever meant to threaten
-// that part of the level. Now spawns DYNAMIC_HAZARD_COUNT of these dogs
-// at once (2, per the "two running total" ask) instead of just one, each
-// teleporting to a new spot on its own independent timer so they don't
-// blink in sync.
-const DYNAMIC_HAZARD_COUNT = 2;
+function updateWeather(dt) {
+  const w = world.weather;
+  if (!w) return;
 
-function initDynamicHazard() {
-  // This mechanic is specific to Level 1 / Stage 1 — other levels (e.g.
-  // Level 2) don't have this dynamic teleporting hazard at all.
-  if (WORLD.levelIndex !== 0) {
-    world.dynamicHazards = [];
-    hazardSpawner = [];
+  const onStormSection = getCurrentSection() === w.section;
+  if (!onStormSection) return;
+
+  // While a lightning flash is active, check every lightning zone for a
+  // hit each frame it's up (both zones fire together).
+  if (
+    w.stormPhase === "active" &&
+    w.stormType === "lightning" &&
+    w.rayVisible
+  ) {
+    const rayH = VIEW_H * RAY_SCALE;
+    for (const zone of w.lightningZones) {
+      const rayW = zone.width;
+      const rayX = zone.x;
+      const rayY = world.def.groundY - rayH;
+      if (
+        player.alive &&
+        rectsOverlap(
+          rayX,
+          rayY,
+          rayW,
+          rayH,
+          player.x,
+          player.y,
+          player.w,
+          player.h,
+        )
+      ) {
+        if (w.section && w.section.spawn) {
+          checkpoint = { x: w.section.spawn.x, y: w.section.spawn.y };
+        }
+        setStormSpeedMode(w, true);
+        w.rayVisible = false;
+        w.stormType = "rain";
+        w.stormPhase = "gap";
+        w.stormTimer = randomStormGap(w);
+        killPlayer();
+        return;
+      }
+    }
+  }
+
+  // While rain is active, touching any rain zone also resets the player
+  // — same treatment as the lightning strike.
+  if (w.stormPhase === "active" && w.stormType === "rain" && w.rainVisible) {
+    const rainH = VIEW_H * RAIN_SCALE;
+    for (const zone of w.rainZones) {
+      const rainY = world.def.groundY - rainH;
+      if (
+        player.alive &&
+        rectsOverlap(
+          zone.x,
+          rainY,
+          zone.width,
+          rainH,
+          player.x,
+          player.y,
+          player.w,
+          player.h,
+        )
+      ) {
+        if (w.section && w.section.spawn) {
+          checkpoint = { x: w.section.spawn.x, y: w.section.spawn.y };
+        }
+        setStormSpeedMode(w, true);
+        w.rainVisible = false;
+        w.stormType = "lightning";
+        w.stormPhase = "gap";
+        w.stormTimer = randomStormGap(w);
+        killPlayer();
+        return;
+      }
+    }
+  }
+
+  w.stormTimer -= dt;
+  if (w.stormTimer > 0) return;
+
+  if (w.stormPhase === "gap") {
+    w.stormPhase = "warning";
+    w.stormTimer = STORM_WARN_LEAD;
+  } else if (w.stormPhase === "warning") {
+    w.stormPhase = "active";
+    if (w.stormType === "lightning") {
+      w.rayVisible = true;
+      playSound(stormSound);
+      w.stormTimer = RAY_VISIBLE_DURATION;
+    } else {
+      w.rainVisible = true;
+      playSound(rainSound);
+      w.stormTimer = RAIN_VISIBLE_DURATION;
+    }
+  } else {
+    // "active" finished — hand off to the other type and go back to a gap.
+    w.rayVisible = false;
+    w.rainVisible = false;
+    w.stormType = w.stormType === "rain" ? "lightning" : "rain";
+    w.stormPhase = "gap";
+    w.stormTimer = randomStormGap(w);
+  }
+}
+
+// Thin colored strip on the ground under each zone — always visible so
+// players always know where rain/lightning will land, regardless of
+// which one is currently active.
+function drawStormFloorMarkers(w) {
+  const markH = 6;
+  const y = world.def.groundY - markH;
+  ctx.fillStyle = "#4fa8ff";
+  for (const zone of w.rainZones) ctx.fillRect(zone.x, y, zone.width, markH);
+  ctx.fillStyle = "#ffd23f";
+  for (const zone of w.lightningZones)
+    ctx.fillRect(zone.x, y, zone.width, markH);
+}
+
+function drawWeather() {
+  const w = world.weather;
+  if (!w) return;
+
+  drawStormFloorMarkers(w);
+
+  // Rain \u2014 a single static image per green zone, sized to fill it, no
+  // scrolling/tiling.
+  if (rainLoaded && w.rainVisible) {
+    const rainH = VIEW_H * RAIN_SCALE;
+    for (const zone of w.rainZones) {
+      const rainW = zone.width;
+      ctx.drawImage(rainImg, zone.x, world.def.groundY - rainH, rainW, rainH);
+    }
+  }
+
+  drawStormWarnings(w);
+
+  if (!w.rayVisible) return;
+
+  const rayH = VIEW_H * RAY_SCALE;
+  for (const zone of w.lightningZones) {
+    const x = zone.x;
+    const y = world.def.groundY - rayH;
+    if (rayLoaded) {
+      ctx.drawImage(rayImg, x, y, zone.width, rayH);
+    } else {
+      ctx.fillStyle = "rgba(255, 255, 200, 0.85)";
+      ctx.fillRect(x, y, zone.width, rayH);
+    }
+  }
+}
+
+// Telegraphs the next flash (whichever type is up) STORM_WARN_LEAD
+// seconds ahead of time, same pulsing "!" language as Level 2 / Stage
+// 1's bird-chirp warning, color-coded so the two are distinguishable:
+// gold for the lightning strike, blue for the rain.
+function drawWarnIcon(x, y, color, alpha) {
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = color;
+  ctx.strokeStyle = "#000";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, 14, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#1a1a1a";
+  ctx.font = "bold 18px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("!", x, y + 1);
+  ctx.globalAlpha = 1;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
+function drawStormWarnings(w) {
+  if (w.stormPhase !== "warning") return;
+  const pulse = 0.6 + Math.sin(gameTime * 14) * 0.4;
+  const cx = w.clusterX + w.clusterWidth / 2;
+  const topY = 70;
+  const color = w.stormType === "lightning" ? "#ffd23f" : "#5fb8ff";
+  drawWarnIcon(cx, topY, color, pulse);
+}
+
+// ------------------------------------------------------------
+// Level 2 / Stage 5 ("Bark Back") — barking dogs / inverted controls.
+//
+// A section can be marked `barkingDogs: true` with a `barkConfig`
+// ({ barkOn, barkOff, barkPhase }, all in seconds — see levels.js). While
+// active:
+//  - the section's dogs cycle between "quiet" and "barking" on a fixed,
+//    learnable rhythm (world.barkState)
+//  - while barking, left/right input is inverted for the player (see
+//    isControlsInverted(), applied in update())
+//  - the dogs themselves are ordinary groundHazards (still instant-death
+//    on touch at all times) — barking only changes controls + feedback,
+//    never the hazard's own collision.
+// ------------------------------------------------------------
+
+function findBarkSection() {
+  return WORLD.sections.find((s) => s.barkingDogs);
+}
+
+function initBarkState() {
+  const section = findBarkSection();
+  if (!section) {
+    world.barkState = null;
     return;
   }
 
-  const section = WORLD.sections[0];
-  const doorForSection = world.mailboxes[0];
-  const hw = HAZARD_W;
-  const hh = HAZARD_H;
-  const minGapPlayer = 200; // avoid spawning too close to player center
-  const minGapDoor = 180; // avoid spawning too close to mailbox center
-  const minGapOtherHazard = 160; // avoid spawning on top of the other dog
-  const leftBound = section.startX;
-  const rightBound = Math.max(section.startX, section.endX - hw);
+  const cfg = section.barkConfig || {};
+  const barkOnDuration = cfg.barkOn !== undefined ? cfg.barkOn : 5;
+  const barkOffDuration = cfg.barkOff !== undefined ? cfg.barkOff : 5;
 
-  // `avoidIndex` lets each hazard's picker steer clear of every *other*
-  // currently-placed dynamic hazard (not itself).
-  const pickX = (avoidIndex) => {
-    let attempts = 0;
-    while (attempts < 50) {
-      const nx =
-        Math.floor(Math.random() * (rightBound - leftBound + 1)) + leftBound;
-      const hazardCenter = nx + hw / 2;
-      const playerCenter = player.x + player.w / 2;
-      const doorCenter = doorForSection.x + doorForSection.width / 2;
-      const clearsOthers = world.dynamicHazards.every((h, i) => {
-        if (i === avoidIndex || !h) return true;
-        return Math.abs(hazardCenter - (h.x + hw / 2)) >= minGapOtherHazard;
-      });
-      if (
-        Math.abs(hazardCenter - playerCenter) >= minGapPlayer &&
-        Math.abs(hazardCenter - doorCenter) >= minGapDoor &&
-        clearsOthers
-      ) {
-        return nx;
-      }
-      attempts++;
-    }
-    // fallback if we couldn't find a spot after many attempts
-    return Math.floor(Math.random() * (rightBound - leftBound + 1)) + leftBound;
+  world.barkState = {
+    section,
+    barkOnDuration,
+    barkOffDuration,
+    phase: "quiet",
+    timer: barkOffDuration,
   };
 
-  // sprite: "dog" — Stage 1's hazards render as dog.png instead of
-  // box.png (same size/mechanics, just a different look for this stage).
-  world.dynamicHazards = [];
-  for (let i = 0; i < DYNAMIC_HAZARD_COUNT; i++) {
-    world.dynamicHazards.push({
-      x: pickX(i),
-      width: hw,
-      height: hh,
-      sprite: "dog",
-    });
-  }
-
-  hazardSpawner = [];
-  for (let i = 0; i < DYNAMIC_HAZARD_COUNT; i++) {
-    // Stagger each dog's retimer slightly so the two don't teleport in
-    // lockstep.
-    const intervalMs = 1500 + i * 200;
-    hazardSpawner.push(
-      setInterval(() => {
-        if (!world || !world.dynamicHazards) return;
-        const oldX = world.dynamicHazards[i] ? world.dynamicHazards[i].x : -9999;
-        let nx = pickX(i);
-        // avoid trivial repeats
-        let attempts = 0;
-        while (Math.abs(nx - oldX) < 8 && attempts < 8) {
-          nx = pickX(i);
-          attempts++;
-        }
-        world.dynamicHazards[i] = { x: nx, width: hw, height: hh, sprite: "dog" };
-      }, intervalMs),
-    );
+  const phaseOffset = cfg.barkPhase || 0;
+  if (phaseOffset > 0) {
+    world.barkState.timer = Math.max(0.1, barkOffDuration - phaseOffset);
   }
 }
 
-// Which of the 5 original levels does world-x `x` fall inside? Drives the
-// section-specific mechanics below (slippery movement, the expanding gap,
-// the blink cycle) now that they all share one map instead of separate
-// pages.
-function getSectionIndexForX(x) {
-  for (const s of WORLD.sections) {
-    if (x >= s.startX && x < s.endX) return s.index;
-  }
-  return WORLD.sections[WORLD.sections.length - 1].index;
+function resetBarkRunState() {
+  if (!world.barkState) return;
+  world.barkState.phase = "quiet";
+  world.barkState.timer = world.barkState.barkOffDuration;
+  stopDogBarkLoop();
 }
 
-function updateLevelLabel() {
-  const idx = getSectionIndexForX(player.x);
-  levelLabel.textContent = WORLD.sections[idx].title.split("—")[0].trim();
+function updateBarkState(dt) {
+  const bs = world.barkState;
+  if (!bs) return;
 
-  // Swap in the sneak-key hint only on Level 2 / Stage 3 (the gravel
-  // stage); every other stage keeps the default control list.
-  if (controlsHint) {
-    const onGravelStage = WORLD.levelIndex === 1 && idx === 2;
-    controlsHint.innerHTML = onGravelStage
-      ? GRAVEL_CONTROLS_HINT
-      : DEFAULT_CONTROLS_HINT;
+  bs.timer -= dt;
+  if (bs.timer <= 0) {
+    if (bs.phase === "quiet") {
+      bs.phase = "barking";
+      bs.timer = bs.barkOnDuration;
+    } else {
+      bs.phase = "quiet";
+      bs.timer = bs.barkOffDuration;
+    }
   }
+
+  const onBarkSection = getCurrentSection() === bs.section;
+
+  if (onBarkSection && bs.phase === "barking") {
+    startDogBarkLoop();
+  } else {
+    stopDogBarkLoop();
+  }
+}
+
+// Whether the player's own left/right input should currently be
+// inverted — only true while actually standing in the bark section AND
+// the dogs are mid-bark.
+function isControlsInverted() {
+  const bs = world.barkState;
+  if (!bs) return false;
+  if (bs.phase !== "barking") return false;
+  return getCurrentSection() === bs.section;
+}
+
+// True during the BARK_WARN_LEAD seconds right before the dogs start
+// barking (and controls flip) — drives the red warning text in draw().
+function isBarkWarningActive() {
+  const bs = world.barkState;
+  if (!bs) return false;
+  if (bs.phase !== "quiet") return false;
+  if (bs.timer > BARK_WARN_LEAD) return false;
+  return getCurrentSection() === bs.section;
+}
+
+// ---------- Birds (Level 2) ----------
+function randomBirdInterval() {
+  return 3; // chirp on a steady 3-second cycle
+}
+
+// First chirp fires almost immediately on spawning into the stage,
+// rather than waiting a full cycle.
+const INITIAL_BIRD_CHIRP_DELAY = 0.4;
+
+// How long before a chirp the "!" warning shows, telegraphing the freeze
+// slightly ahead of the actual sound/lock (see draw()'s freeze indicator).
+const BIRD_WARN_LEAD = 0.4;
+// Small gap between the warning icon turning off and the chirp sound /
+// freeze actually firing, so the audio is clearly heard AFTER the
+// indicator disappears rather than exactly on top of it.
+const BIRD_WARN_GAP = 0.15;
+
+function isBirdWarningActive() {
+  if (!areLevel2Stage1BirdsActive()) return false;
+  return (world.birdState || []).some(
+    (b) => b.chirpTimer > BIRD_WARN_GAP && b.chirpTimer <= BIRD_WARN_LEAD,
+  );
+}
+
+// Birds are only active while the player is in Level 2 / Stage 1 AND
+// hasn't physically walked past that stage's own mailbox yet — compared
+// directly against the player's current x each frame (never persisted),
+// so it always reflects this run, not whether the stage was EVER
+// completed before.
+function areLevel2Stage1BirdsActive() {
+  const curSection = getCurrentSection();
+  if (curSection.levelIndex !== 1 || curSection.stageIndex !== 0) return false;
+  const mb = world.mailboxes.find(
+    (m) => m.levelIndex === 1 && m.stageIndex === 0,
+  );
+  return !mb || player.x < mb.x;
+}
+
+function updateBirds(dt) {
+  // Birds only exist in Level 2 / Stage 1 data, but scope explicitly by
+  // stage AND that stage's own mailbox activation — so chirping stops
+  // the instant the player passes that checkpoint, not just when they
+  // cross the raw section boundary further ahead.
+  if (!areLevel2Stage1BirdsActive()) return;
+  for (const b of world.birdState || []) {
+    b.chirpTimer -= dt;
+    if (b.chirpTimer <= 0) {
+      playBirdChirpSound();
+      freezeTimer = BIRD_FREEZE_DURATION;
+      b.chirpTimer = randomBirdInterval();
+    }
+  }
+}
+
+// Reads which ground surface (if any) the ground segment at world-x `x`
+// declares ("gravel" for Level 2 / Stage 3, otherwise undefined/"dirt").
+function getGroundSurfaceAt(x) {
+  for (const g of world.def.ground) {
+    if (x >= g.x && x < g.x + g.width) return g.surface || "dirt";
+  }
+  return null;
 }
 
 function clampCamera(targetX) {
   const half = VIEW_W / 2;
   let cx = targetX - half;
-  cx = Math.max(0, cx);
-  cx = Math.min(Math.max(0, WORLD.width - VIEW_W), cx);
-  if (WORLD.width < VIEW_W) cx = 0;
+
+  // Clamp within the CURRENT level's own extent, not the whole merged
+  // world — otherwise the camera can drift into the dead-zone gap
+  // between levels and show empty (canvas-colored) background past
+  // either level's edge. This keeps the right edge of Level 1's screen
+  // always at BG.png's own right edge, and the left edge of Level 3's
+  // screen always at BG3.png's own left edge.
+  const section = WORLD.sections[getSectionIndexForX(targetX)];
+  const ext = section ? LEVEL_EXTENTS[section.levelIndex] : null;
+  const lo = ext ? ext.start : 0;
+  const hi = ext ? Math.max(ext.start, ext.end - VIEW_W) : WORLD.width - VIEW_W;
+
+  cx = Math.max(lo, cx);
+  cx = Math.min(hi, cx);
+  if (ext && ext.end - ext.start < VIEW_W) cx = ext.start;
   return cx;
 }
 
@@ -1186,7 +1683,6 @@ function setTitleBackground(active) {
 }
 
 function showStartOverlay() {
-  stopGravelFootsteps();
   playMenuMusic();
   setTitleBackground(true);
   overlayTitle.textContent = "TACTIC";
@@ -1200,7 +1696,6 @@ function showStartOverlay() {
 }
 
 function showEndOverlay() {
-  stopGravelFootsteps();
   setTitleBackground(false);
 
   overlayTitle.textContent = "You made it!";
@@ -1247,10 +1742,7 @@ restartBtn.addEventListener("click", () => {
 });
 
 window.addEventListener("keydown", (e) => {
-  // While the code-entry keypad is open, it owns all keyboard input:
-  // digits/backspace/enter drive it directly, Escape cancels it, and
-  // everything else (movement, jump, pause) is swallowed so the player
-  // can't walk around or open the pause menu mid-entry.
+  // While the code-entry keypad is open, it owns all keyboard input.
   if (keypadEl && keypadEl.root.style.display === "flex") {
     if (/^Digit[0-9]$/.test(e.code)) {
       handleKeypadKey(e.code.replace("Digit", ""));
@@ -1287,14 +1779,12 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "ArrowUp" || e.code === "Space" || e.code === "KeyW") {
     keys.up = true;
   }
-  // Hold "H" to sneak: slows the player down in exchange for moving
-  // silently over noisy surfaces (see Level 2 / Stage 3's gravel).
+  if (e.code === "KeyT") keys.t = true;
   if (e.code === "KeyH") keys.slow = true;
   if (e.code === "Escape") {
     if (!isPaused && overlay.classList.contains("hidden")) {
       // show pause menu
       isPaused = true;
-      stopGravelFootsteps();
       setTitleBackground(false);
       overlayTitle.textContent = "PAUSED";
       overlayBtn.textContent = "Restart From Checkpoint";
@@ -1305,8 +1795,8 @@ window.addEventListener("keydown", (e) => {
       if (!menuBtn) {
         menuBtn = document.createElement("button");
         menuBtn.id = "overlay-menu-btn";
+        menuBtn.className = "menu-btn";
         menuBtn.textContent = "Main Menu";
-        menuBtn.style.marginLeft = "10px";
         overlayBtn.parentNode.insertBefore(menuBtn, overlayBtn.nextSibling);
         menuBtn.addEventListener("click", () => {
           playButtonSound();
@@ -1341,6 +1831,7 @@ window.addEventListener("keyup", (e) => {
   if (e.code === "ArrowUp" || e.code === "Space" || e.code === "KeyW") {
     keys.up = false;
   }
+  if (e.code === "KeyT") keys.t = false;
   if (e.code === "KeyH") keys.slow = false;
 });
 
@@ -1417,6 +1908,24 @@ function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
   return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
+// Rectangle-vs-block overlap, but carves a rounded top-right corner out
+// of the block when it has a cornerRadius (used for the truck's sloped
+// cab) so the player isn't blocked by empty air above that corner.
+function overlapsBlock(px, py, pw, ph, bx, by, bw, bh, cornerRadius) {
+  if (!rectsOverlap(px, py, pw, ph, bx, by, bw, bh)) return false;
+  if (!cornerRadius) return true;
+  const cx = bx + bw - cornerRadius;
+  const cy = by + cornerRadius;
+  const nearestX = Math.max(px, Math.min(cx, px + pw));
+  const nearestY = Math.max(py, Math.min(cy, py + ph));
+  if (nearestX >= cx && nearestY <= cy) {
+    const dx = nearestX - cx;
+    const dy = nearestY - cy;
+    return dx * dx + dy * dy <= cornerRadius * cornerRadius;
+  }
+  return true;
+}
+
 // ------------------------------------------------------------
 // Update
 // ------------------------------------------------------------
@@ -1437,6 +1946,7 @@ function killPlayer() {
   if (!player.alive) return;
   player.alive = false;
   stopGravelFootsteps();
+  stopDogBarkLoop();
   deathFlashTimer = 0.5;
   setTimeout(() => {
     respawnPlayer();
@@ -1517,45 +2027,6 @@ function updateGroundHazards(dt) {
   }
 }
 
-// ---------- Birds (Level 2) ----------
-// Each bird chirps at its own random interval. When one chirps, it plays
-// the chirp sound and locks the player's controls (freezeTimer) for
-// BIRD_FREEZE_DURATION seconds — doesn't hurt/kill the player, just
-// interrupts them, the way an involuntary tic would.
-function randomBirdInterval() {
-  return 3 + Math.random() * 4; // next chirp in 3–7s
-}
-
-/*
-function updateBirds(dt) {
-  
-  
-  for (const b of world.birdState || []) {
-    b.chirpTimer -= dt;
-    if (b.chirpTimer <= 0) {
-      playBirdChirpSound();
-      freezeTimer = BIRD_FREEZE_DURATION;
-      b.chirpTimer = randomBirdInterval();
-    }
-  }
-}
-  */
-
-function updateBirds(dt) {
-  const playerSection = getSectionIndexForX(player.x);
-  for (const b of world.birdState || []) {
-    const birdSection = getSectionIndexForX(b.x);
-    if (birdSection !== playerSection) continue; // bird's stage isn't the one you're in
-
-    b.chirpTimer -= dt;
-    if (b.chirpTimer <= 0) {
-      playBirdChirpSound();
-      freezeTimer = BIRD_FREEZE_DURATION;
-      b.chirpTimer = randomBirdInterval();
-    }
-  }
-}
-
 function updateTraps(dt) {
   for (const t of world.trapState) {
     if (t.armed && !t.fallen) {
@@ -1580,17 +2051,16 @@ function updateTraps(dt) {
 //   speed: 190,               // px/s the gap expands (tune this for difficulty)
 // }
 function initGapExpansion() {
-  // This mechanic is specific to Level 1 / Stage 4 (section index 3 of
-  // that level's map) — other levels don't have this gap-seed trap.
-  if (WORLD.levelIndex !== 0) {
+  // Section 4 is the old Level 4, found by level/stage rather than a raw
+  // section index so this keeps working regardless of where Level 1 ends
+  // up sitting once more levels are merged in ahead of/behind it.
+  const section = WORLD.sections.find(
+    (s) => s.levelIndex === 0 && s.stageIndex === 3,
+  );
+  if (!section) {
     world.gapExpansion = null;
     return;
   }
-
-  // Section 4 is the old Level 4. Its gap-seed trap lives at
-  // (section start + 380) in world space; maxWidth is tuned so the gap
-  // stops well short of that section's mailbox.
-  const section = WORLD.sections[3];
   world.gapExpansion = {
     triggered: false,
     x: section.startX + 380,
@@ -1628,8 +2098,6 @@ function updateGapExpansion(dt) {
   }
 }
 
-// Storm/weather system removed for Level 2 Stage 4.
-
 // ---------- Flashing hazard boxes (Stage 5) ----------
 // Each hazard tagged `flash: true` blinks on its own independent on/off
 // cycle (flashOn seconds visible, flashOff seconds invisible, flashPhase
@@ -1646,9 +2114,306 @@ function isHazardVisible(hz) {
   return t % cycle < onDur;
 }
 
+// ---------- Level 3 / Stage 1 — duck followers ----------
+// Ducks always follow (no trigger/spawn-delay gating — they're already
+// spawned in) but are clamped to their own stage's x-range so they
+// can't be pulled past the mailbox into Stage 2.
+function updateDuckFollowers(dt) {
+  for (const d of world.duckState || []) {
+    if (d.curY === null || d.curY === undefined) {
+      d.curY = world.def.groundY - 40;
+    }
+    const targetX = player.x - d.followDistance;
+    // Move at a fixed rate (d.speed px/s) toward the target instead of
+    // exponential smoothing — smoothing scales the actual movement
+    // speed with distance from the player, which reads as ducks moving
+    // at different rates. A constant step, clamped so it doesn't
+    // overshoot, moves all ducks at the same true rate.
+    const diff = targetX - d.curX;
+    const step = d.speed * dt;
+    let nx;
+    if (Math.abs(diff) <= step) {
+      nx = targetX;
+    } else {
+      nx = d.curX + Math.sign(diff) * step;
+    }
+    nx = Math.max(d.minX, Math.min(d.maxX, nx));
+    // Face the direction it's actually moving (chasing the mailman),
+    // not the raw target direction, so it doesn't flip while pinned
+    // against the mailbox clamp.
+    if (nx > d.curX + 0.05) d.facing = 1;
+    else if (nx < d.curX - 0.05) d.facing = -1;
+    d.curX = nx;
+    d.curY = world.def.groundY - 40;
+  }
+}
+
+const DUCK_W = 34;
+const DUCK_H = 40;
+
+// Touching a duck damages the player and resets them to the start of
+// the stage (same respawn flow as any other hazard). Returns true if
+// the player was just killed, so update() can bail out for the frame.
+function checkDuckCollisions() {
+  for (const d of world.duckState || []) {
+    if (
+      rectsOverlap(
+        player.x,
+        player.y,
+        player.w,
+        player.h,
+        d.curX,
+        d.curY,
+        DUCK_W,
+        DUCK_H,
+      )
+    ) {
+      killPlayer();
+      return true;
+    }
+  }
+  return false;
+}
+
+// ---------- Level 3 / Stage 2 — falling dialogue bubbles ----------
+const BUBBLE_SIZE = 50;
+const BUBBLE_WIDTH = 64; // stretched wider than tall
+
+function updateBubbles(dt) {
+  for (const b of world.bubbleState || []) {
+    if (b.caught || b.missed) continue;
+
+    // Don't start falling until the player has actually entered this
+    // bubble's stage (levelIndex/stageIndex) — otherwise they'd already
+    // be mid-fall (or missed) before the player even arrives.
+    const section = WORLD.sections.find(
+      (s) => s.levelIndex === b.levelIndex && s.stageIndex === b.stageIndex,
+    );
+    if (section && player.x < section.startX) continue;
+
+    b.curY += b.fallSpeed * dt;
+    b.curX += (b.driftSpeed || 0) * dt;
+
+    if (
+      rectsOverlap(
+        player.x,
+        player.y,
+        player.w,
+        player.h,
+        b.curX - BUBBLE_WIDTH / 2,
+        b.curY - BUBBLE_SIZE / 2,
+        BUBBLE_WIDTH,
+        BUBBLE_SIZE,
+      )
+    ) {
+      b.caught = true;
+      continue;
+    }
+
+    if (b.curY > world.def.groundY) {
+      // Missed for good — only 5 bubbles fall in total, so a miss counts
+      // against the stage instead of respawning for another try.
+      b.missed = true;
+    }
+  }
+
+  // Once every bubble has resolved (caught or missed), a miss anywhere
+  // in the set fails the stage: reset to the beginning and the counter
+  // resets with it (freshBubbleState() on respawn). Scoped to bubbles
+  // belonging to the player's CURRENT stage only — otherwise a miss
+  // recorded back in Stage 2 stays flagged forever and re-kills the
+  // player on every later respawn, in every other stage.
+  const curSection = getCurrentSection();
+  const stageBubbles = (world.bubbleState || []).filter(
+    (b) =>
+      b.levelIndex === curSection.levelIndex &&
+      b.stageIndex === curSection.stageIndex,
+  );
+  if (stageBubbles.length > 0) {
+    const allResolved = stageBubbles.every((b) => b.caught || b.missed);
+    const anyMissed = stageBubbles.some((b) => b.missed);
+    if (allResolved && anyMissed) {
+      killPlayer();
+    }
+  }
+}
+
+// How many of this mailbox's stage's bubbles are still uncaught? Used to
+// gate the mailbox on Level 3 / Stage 2 — stages/mailboxes without any
+// bubbles return 0 and are never gated.
+function stageBubblesRemaining(mb) {
+  const stageBubbles = (world.bubbleState || []).filter(
+    (b) => b.stageIndex === mb.stageIndex && b.levelIndex === mb.levelIndex,
+  );
+  if (stageBubbles.length === 0) return 0;
+  return stageBubbles.filter((b) => !b.caught).length;
+}
+
+// ---------- Stage 4 — pushing NPCs ----------
+// Sized to match the player's height (64px), at businessman.png's
+// native aspect ratio (52x80).
+const PUSHING_NPC_W = 42;
+const PUSHING_NPC_H = 64;
+const PUSHING_NPC_SPEED = 80; // pixels per second
+const PUSH_STRENGTH = 400; // knockback velocity in px/s
+
+function updatePushingNpcs(dt) {
+  for (const npc of world.pushingNpcState || []) {
+    const minX = npc.minX;
+    const maxX = npc.maxX;
+
+    // Simple patrol with direction changes at boundaries
+    npc.currentX += npc.direction * npc.speed * dt;
+
+    if (npc.currentX <= minX) {
+      npc.currentX = minX;
+      npc.direction = 1;
+    }
+    if (npc.currentX >= maxX) {
+      npc.currentX = maxX;
+      npc.direction = -1;
+    }
+  }
+}
+
+function checkPushingNpcCollisions() {
+  for (const npc of world.pushingNpcState || []) {
+    const npcY = world.def.groundY - PUSHING_NPC_H;
+
+    if (
+      !rectsOverlap(
+        player.x,
+        player.y,
+        player.w,
+        player.h,
+        npc.currentX,
+        npcY,
+        PUSHING_NPC_W,
+        PUSHING_NPC_H,
+      )
+    ) {
+      continue;
+    }
+
+    // Solid wall, not a jump-trigger: the player can't walk through the
+    // NPC, so resolve them out to whichever side they're overlapping
+    // from. Re-run every frame while overlapping, so if the NPC is
+    // walking into a standing player it shoves them along with it
+    // (rather than letting them clip through) — the player has to jump
+    // over it to get past.
+    const playerCenter = player.x + player.w / 2;
+    const npcCenter = npc.currentX + PUSHING_NPC_W / 2;
+    if (playerCenter < npcCenter) {
+      player.x = npc.currentX - player.w;
+    } else {
+      player.x = npc.currentX + PUSHING_NPC_W;
+    }
+    player.vx = 0;
+  }
+}
+
+// ---------- Level 3 / Stage 3 — supportive NPCs ----------
+function updateSupportNPCs(dt) {
+  const section = getCurrentSection();
+  const baseFactor =
+    section.baseSpeedFactor !== undefined ? section.baseSpeedFactor : 1;
+
+  if (!world.npcState || world.npcState.length === 0) {
+    // Nothing to charge against — ease back toward normal full speed.
+    world.speedFactor += (1 - world.speedFactor) * Math.min(1, 3 * dt);
+    return;
+  }
+
+  let targetFactor = baseFactor;
+  for (const n of world.npcState) {
+    const dx = player.x + player.w / 2 - n.x;
+    const dy = player.y + player.h / 2 - n.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist <= n.radius) {
+      n.charge = Math.min(n.chargeTime, n.charge + dt);
+    } else if (n.charge > 0) {
+      // Decays back toward zero once the player walks away, taking
+      // their speed back down with it rather than holding the boost.
+      n.charge = Math.max(0, n.charge - dt);
+    }
+
+    // Speed boost scales directly with how loaded the circle is: half
+    // charge gives half the extra speed, a full charge gives the full
+    // configured boostFactor.
+    const fraction = n.charge / n.chargeTime;
+    const boostMultiplier = 1 + (n.boostFactor - 1) * fraction;
+    targetFactor = Math.max(targetFactor, baseFactor * boostMultiplier);
+  }
+
+  // Ease toward whichever target is currently active (base or boosted) —
+  // this is what makes leaving an NPC's radius mid-boost decay smoothly
+  // back down to baseSpeedFactor rather than snapping.
+  world.speedFactor += (targetFactor - world.speedFactor) * Math.min(1, 2 * dt);
+}
+
+// ---------- Level 3 / Stage 5 — jump-boost NPCs ----------
+// Same "stand near it, let it charge, get a temporary boost" shape as
+// the Stage 3 supportive NPCs above, except the payoff is a taller jump
+// instead of extra speed — enough to clear the tall building blocks in
+// this stage and reach the final checkpoint. Scoped to Level 3 / Stage 5
+// only via each NPC's stageIndex/levelIndex (set in levels.js), so it
+// never touches Stage 3's speed-boost NPCs or any other stage.
+function updateJumpBoostNpcs(dt) {
+  let bestFraction = 0;
+  let bestMultiplier = 1;
+
+  for (const n of world.jumpBoostState || []) {
+    const dx = player.x + player.w / 2 - n.x;
+    const dy = player.y + player.h / 2 - n.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    // n.radius is deliberately tight — the player has to be directly
+    // below or within a very close range of the circle to load it at
+    // all. Stepping a bit further away unloads it again (discharge),
+    // it doesn't just hold at whatever it reached.
+    if (dist <= n.radius) {
+      n.charge = Math.min(n.chargeTime, n.charge + dt);
+    } else {
+      const rate = n.dischargeRate !== undefined ? n.dischargeRate : 1;
+      n.charge = Math.max(0, n.charge - dt * rate);
+    }
+
+    const fraction = n.charge / n.chargeTime;
+    if (fraction > bestFraction) {
+      bestFraction = fraction;
+      // Jump height is relative to how loaded the circle is: half-loaded
+      // gives half of the extra jump height, fully loaded gives the full
+      // configured jumpMultiplier.
+      bestMultiplier = 1 + (n.jumpMultiplier - 1) * fraction;
+    }
+  }
+
+  // Live boost, not a held timer — it reflects the circle's current
+  // charge, so it fades the instant the player steps away and the
+  // charge starts draining.
+  player.jumpBoostMultiplier = bestFraction > 0 ? bestMultiplier : 1;
+  player.jumpBoostTimer = bestFraction > 0 ? 0.05 : 0;
+}
+
+function getEffectiveSpeedFactor() {
+  let factor = world.speedFactor !== undefined ? world.speedFactor : 1;
+  if (player.slowTimer > 0) factor *= player.slowFactor;
+  return factor;
+}
+
 function update(dt) {
   if (!player.alive) return;
 
+  if (player.invulnTimer > 0) player.invulnTimer -= dt;
+  if (player.slowTimer > 0) player.slowTimer -= dt;
+  if (player.jumpBoostTimer > 0) player.jumpBoostTimer -= dt;
+
+  // The bird freeze (and its warning) is exclusive to Level 2 / Stage 1,
+  // before that stage's mailbox is reached — force-clear it immediately
+  // once the player passes that checkpoint, so it can never bleed into
+  // Stage 2.
+  if (!areLevel2Stage1BirdsActive()) freezeTimer = 0;
   if (freezeTimer > 0) freezeTimer -= dt;
   const isFrozen = freezeTimer > 0;
 
@@ -1656,29 +2421,43 @@ function update(dt) {
   updateGroundHazards(dt);
   updateTraps(dt);
   updateGapExpansion(dt);
+  updateDuckFollowers(dt);
+  updateBubbles(dt);
+  updatePushingNpcs(dt);
+  updateSupportNPCs(dt);
+  updateJumpBoostNpcs(dt);
   updateBirds(dt);
   updateCarsAndNpc(dt);
   updateWeather(dt);
+  updateBarkState(dt);
 
   // horizontal input
-  // Normal levels use instant velocity for responsive controls.
-  // Level 3 has a slippery feel: smooth velocity changes both on ground and in the air.
-  // While frozen (a bird just chirped — Level 2), all movement input is
-  // ignored and the player holds still, same as a real involuntary tic
-  // interrupting whatever they were doing.
-  // Holding "H" sneaks: caps movement at SNEAK_SPEED instead of MOVE_SPEED.
-  // Slower everywhere (simple, predictable control), but its real payoff is
-  // on gravel (Level 2 / Stage 3), where sneaking also silences footsteps
-  // (see the gravel-footstep block below).
-  const currentMoveSpeed = keys.slow ? SNEAK_SPEED : MOVE_SPEED;
-  const targetVx = isFrozen
-    ? 0
-    : keys.left
-      ? -currentMoveSpeed
-      : keys.right
-        ? currentMoveSpeed
-        : 0;
-  if (getSectionIndexForX(player.x) === 2 && player.grounded) {
+  // Normal levels move at a flat MOVE_SPEED. Level 1 / Stage 3 ("Delayed
+  // Tics") has a slippery feel: smooth velocity changes on the ground
+  // instead of instant accel. Checked by level/stage rather than a raw
+  // section index so this keeps pointing at the right stage regardless
+  // of where that stage ends up sitting once more levels are merged in.
+  // While frozen (a bird just chirped — Level 2), input is ignored.
+  // Holding "H" sneaks at SNEAK_SPEED instead of MOVE_SPEED — its real
+  // payoff is silencing footsteps on Level 2 / Stage 3's gravel.
+  const effFactor = getEffectiveSpeedFactor();
+  const baseSpeed = keys.slow ? SNEAK_SPEED : MOVE_SPEED;
+  const inverted = isControlsInverted();
+  const rawLeft = !isFrozen && keys.left;
+  const rawRight = !isFrozen && keys.right;
+  const effectiveLeft = inverted ? rawRight : rawLeft;
+  const effectiveRight = inverted ? rawLeft : rawRight;
+  const targetVx = effectiveLeft
+    ? -baseSpeed * effFactor
+    : effectiveRight
+      ? baseSpeed * effFactor
+      : 0;
+
+  const curSection = getCurrentSection();
+  const isSlipperyStage =
+    curSection.levelIndex === 0 && curSection.stageIndex === 2;
+
+  if (isSlipperyStage && player.grounded) {
     // smaller accel => more slippery on ground only
     const slipAccel = 1.0;
     const blend = Math.min(1, slipAccel * dt);
@@ -1693,7 +2472,14 @@ function update(dt) {
 
   // jump
   if (keys.up && player.grounded && !isFrozen) {
-    player.vy = JUMP_VELOCITY;
+    // Level 3 / Stage 5: a charged-up jump-boost NPC temporarily raises
+    // how high the player can jump, so they can clear the stage's tall
+    // building blocks. Everywhere else this is a no-op since
+    // jumpBoostTimer stays at 0.
+    const boosted = player.jumpBoostTimer > 0;
+    player.vy = boosted
+      ? JUMP_VELOCITY * player.jumpBoostMultiplier
+      : JUMP_VELOCITY;
     player.grounded = false;
     playJumpSound();
     triggerJumpTraps();
@@ -1712,7 +2498,7 @@ function update(dt) {
       const bx = b.x;
       const bTop = world.def.groundY - b.height;
       if (
-        rectsOverlap(
+        overlapsBlock(
           player.x,
           player.y,
           player.w,
@@ -1721,6 +2507,7 @@ function update(dt) {
           bTop,
           b.width,
           b.height,
+          b.cornerRadius,
         )
       ) {
         if (player.x > prevX) {
@@ -1732,6 +2519,41 @@ function update(dt) {
         }
         player.vx = 0;
       }
+    }
+  }
+
+  // A locked mailbox (Level 2-2's code puzzle) blocks an invisible wall
+  // spanning the full screen height, not just the mailbox sprite's own
+  // hitbox, so the player can't walk or jump past it to skip the
+  // checkpoint. Dropped the instant the correct code unlocks it.
+  for (const mb of world.mailboxes) {
+    if (!mb.locked) continue;
+    const wallTop = 0;
+    const wallHeight = world.def.groundY;
+    const touchingWall = rectsOverlap(
+      player.x,
+      player.y,
+      player.w,
+      player.h,
+      mb.x,
+      wallTop,
+      mb.width,
+      wallHeight,
+    );
+    if (touchingWall) {
+      if (player.x > prevX) {
+        player.x = mb.x - player.w;
+        // Reaching the wall from the left is "arriving at the mailbox" —
+        // prompt the code keypad right here, since the overlap-based
+        // mailbox check below can never fire once this wall has already
+        // pushed the player back out of the mailbox's own hitbox.
+        if (!mb._suppressReopen) openKeypadForMailbox(mb);
+      } else if (player.x < prevX) {
+        player.x = mb.x + mb.width;
+      }
+      player.vx = 0;
+    } else {
+      mb._suppressReopen = false;
     }
   }
 
@@ -1762,11 +2584,6 @@ function update(dt) {
 
   // ---- collisions: ground segments ----
   player.grounded = false;
-  // Which ground segment (if any) the player actually landed/settled on
-  // this frame — used below to tell gravel underfoot from anything else
-  // so the footstep loop only plays over gravel (see the gravel-footstep
-  // block in update() and Level 2 / Stage 3's `surface: "gravel"` ground
-  // segments).
   let standingSurface = null;
   const feetY = player.y + player.h;
   const segs = getGroundSegmentsAt(player.x);
@@ -1805,28 +2622,16 @@ function update(dt) {
     p.lastX = px;
   }
 
-  // ---- gravel footstep sound (Level 2 / Stage 3) ----
-  // Plays only while the player is actually grounded on a "gravel" ground
-  // segment AND moving — holding still on gravel, or being airborne over
-  // it, stays silent. Landing on a moving platform overrides
-  // standingSurface back to null above, so mid-air/platform sections of a
-  // gravel stage don't keep the loop going either. Holding "H" (keys.slow)
-  // sneaks: the player moves at SNEAK_SPEED and stays silent even while
-  // walking across gravel.
+  // ---- gravel footstep sound + noise meter (Level 2 / Stage 3) ----
   const isMovingOnGround = player.grounded && Math.abs(player.vx) > 5;
-  const isNoisy = isMovingOnGround && standingSurface === "gravel" && !keys.slow;
+  const isNoisy =
+    isMovingOnGround && standingSurface === "gravel" && !keys.slow;
   if (isNoisy) {
     startGravelFootsteps();
   } else {
     stopGravelFootsteps();
   }
-
-  // ---- noise meter (Level 2 / Stage 3) ----
-  // Only ticks on that stage — the gravel-only `isNoisy` check above means
-  // this is a no-op everywhere else anyway, but the section check keeps it
-  // explicit and matches the `onGravelStage` pattern used for the HUD/hint.
-  const onGravelStage = WORLD.levelIndex === 1 && getSectionIndexForX(player.x) === 2;
-  if (onGravelStage) {
+  if (standingSurface === "gravel" || noiseLevel > 0) {
     noiseLevel += (isNoisy ? NOISE_RATE_UP : -NOISE_RATE_DOWN) * dt;
     noiseLevel = Math.max(0, Math.min(NOISE_MAX, noiseLevel));
     if (noiseLevel >= NOISE_MAX) {
@@ -1867,12 +2672,27 @@ function update(dt) {
     const gx = g.currentX !== undefined ? g.currentX : g.x;
     const gy = world.def.groundY - g.height;
     if (
-      rectsOverlap(player.x, player.y, player.w, player.h, gx, gy, g.width, g.height)
+      rectsOverlap(
+        player.x,
+        player.y,
+        player.w,
+        player.h,
+        gx,
+        gy,
+        g.width,
+        g.height,
+      )
     ) {
       killPlayer();
       return;
     }
   }
+
+  // ---- Level 3 / Stage 1 — duck followers (lethal on touch) ----
+  if (checkDuckCollisions()) return;
+
+  // ---- Stage 4 — pushing NPCs ----
+  checkPushingNpcCollisions();
 
   // ---- fell into a pit / off the world ----
   // Each section keeps its own "how far can you fall before you die" rule
@@ -1889,58 +2709,31 @@ function update(dt) {
   // override the default "sitting on the ground" position. Hitbox size
   // (56x90) is unchanged and still matches mailbox.png exactly. Touching
   // a mailbox sets it as the respawn point; it no longer ends the level.
-  // A mailbox flagged `locked` (Level 2-2's code puzzle) doesn't complete
-  // on touch — it opens the code-entry keypad instead, and only behaves
-  // like a normal checkpoint once the correct code has unlocked it.
-  /*
+  // Level 3 / Stage 2's mailbox is additionally gated: it won't activate
+  // until every falling bubble in that stage has been caught.
   for (const mb of world.mailboxes) {
     const mbTop = mb.y !== undefined ? mb.y : world.def.groundY - mb.height;
-    const playerCenterX = player.x + player.w / 2;
-    const playerCenterY = player.y + player.h / 2;
-    const mbCenterX = mb.x + mb.width / 2;
-    const mbCenterY = mbTop + mb.height / 2;
-    const horizontalPadding = 8;
-    const verticalPadding = 10;
-
-    if (
-      Math.abs(playerCenterX - mbCenterX) < (player.w / 2 + mb.width / 2 + horizontalPadding) &&
-      Math.abs(playerCenterY - mbCenterY) < (player.h / 2 + mb.height / 2 + verticalPadding)
-    ) {
+    const overlapping = rectsOverlap(
+      player.x,
+      player.y,
+      player.w,
+      player.h,
+      mb.x,
+      mbTop,
+      mb.width,
+      mb.height,
+    );
+    if (overlapping) {
       if (mb.locked) {
-        openKeypadForMailbox(mb);
-      } else {
-        activateCheckpoint(mb);
+        if (!mb._suppressReopen) openKeypadForMailbox(mb);
+        continue;
       }
-    }
-  }
-    */
-
-  for (const mb of world.mailboxes) {
-  const mbTop = mb.y !== undefined ? mb.y : world.def.groundY - mb.height;
-  const playerCenterX = player.x + player.w / 2;
-  const playerCenterY = player.y + player.h / 2;
-  const mbCenterX = mb.x + mb.width / 2;
-  const mbCenterY = mbTop + mb.height / 2;
-  const horizontalPadding = 8;
-  const verticalPadding = 10;
-
-  const overlapping =
-    Math.abs(playerCenterX - mbCenterX) < (player.w / 2 + mb.width / 2 + horizontalPadding) &&
-    Math.abs(playerCenterY - mbCenterY) < (player.h / 2 + mb.height / 2 + verticalPadding);
-
-  if (overlapping) {
-    if (mb.locked) {
-      if (!mb._suppressReopen) {
-        openKeypadForMailbox(mb);
-      }
-    } else {
+      if (stageBubblesRemaining(mb) > 0) continue; // blocked until all bubbles caught
       activateCheckpoint(mb);
+    } else {
+      mb._suppressReopen = false;
     }
-  } else {
-    mb._suppressReopen = false; // player stepped away — arm it again for next time
   }
-}
-
 
   updateLevelLabel();
 
@@ -1957,29 +2750,22 @@ function update(dt) {
 function activateCheckpoint(mb) {
   if (mb.activated) return;
   mb.activated = true;
-  checkpoint = {
-    x: mb.x,
-    y: mb.y !== undefined ? mb.y : world.def.groundY - mb.height,
-  };
   playMailboxBellSound();
 
   Progress.completeStage(mb.levelIndex, mb.stageIndex);
 
-  // "Last stage of the level" means the last stage that's actually been
-  // built so far (WORLD_DEFS[levelIndex].stageCount), not necessarily the
-  // full STAGES_PER_LEVEL — e.g. Level 2 currently only has L2-1 and
-  // L2-2 built, so clearing L2-2 should send the player back to Level
-  // Select just like clearing L1-5 does, rather than leaving them
-  // stranded with nothing further to do on that map. For Level 1 these
-  // are the same number (5), so its behavior is unchanged.
-  const levelDef = WORLD_DEFS[mb.levelIndex];
-  const builtStageCount = levelDef ? levelDef.stageCount : STAGES_PER_LEVEL;
-  const isLastStageOfLevel = mb.stageIndex === builtStageCount - 1;
+  // "Last stage of the level" means the last stage actually built for
+  // this level (some levels, like Level 2, have fewer than
+  // STAGES_PER_LEVEL stages built so far), not a hardcoded count.
+  const builtStagesForLevel = WORLD.sections.filter(
+    (s) => s.levelIndex === mb.levelIndex,
+  ).length;
+  const isLastStageOfLevel = mb.stageIndex === builtStagesForLevel - 1;
   const isLastLevel = mb.levelIndex === LEVEL_COUNT - 1;
 
   if (isLastStageOfLevel && isLastLevel) {
     // The true end of the game (Level 5's 5th stage). Dormant for now
-    // since only Level 1 is built — this fires once Levels 2-5 exist.
+    // since Levels 2, 4, 5 aren't built — this fires once they exist.
     showEndOverlay();
     return;
   }
@@ -2011,28 +2797,32 @@ function draw() {
   // drawn in world (not screen) coordinates.
   ctx.translate(-camera.x, 0);
 
-  // ground/backdrop art — BG.png is the shared backdrop for Levels 1 and 2,
-  // spanning the whole map as a continuous image instead of a per-screen
-  // tile, so it pans naturally with the camera as the player moves.
-  const useSharedLevelBg = world.def.levelIndex === 0 || world.def.levelIndex === 1;
-  if (useSharedLevelBg && levelBgLoaded) {
-    // Scale BG.png to the viewport height while preserving its exact
-    // aspect ratio, then tile that scaled copy across the level width.
-    const bgW = levelBgImg.naturalWidth || 1;
-    const bgH = levelBgImg.naturalHeight || VIEW_H;
-    const scale = VIEW_H / bgH;
-    const drawW = bgW * scale;
-    const drawH = VIEW_H;
-    const tileCount = Math.ceil(world.def.width / drawW);
-
-    for (let i = 0; i < tileCount; i++) {
-      const tx = i * drawW;
-      ctx.drawImage(levelBgImg, 0, 0, bgW, bgH, tx, 0, drawW, drawH);
+  // ground/backdrop art — BG.png is drawn once in world space here and
+  // naturally pans/cycles under the player as the camera scrolls across
+  // each checkpoint, instead of sitting fixed to the screen. See the
+  // note by LEVEL_BG_SRC above re: BG.png only covering Level 1's
+  // stretch of the map today.
+  for (const levelIdxStr of Object.keys(LEVEL_EXTENTS)) {
+    const levelIdx = Number(levelIdxStr);
+    const ext = LEVEL_EXTENTS[levelIdx];
+    const w = ext.end - ext.start;
+    // Level 2 gets BG2.png, Level 3 gets BG3.png; every other built level
+    // falls back to BG.png, each stretched only across its own stretch of
+    // the map so the levels read as separate spaces.
+    const img =
+      levelIdx === 2 ? level3BgImg : levelIdx === 1 ? level2BgImg : levelBgImg;
+    const loaded =
+      levelIdx === 2
+        ? level3BgLoaded
+        : levelIdx === 1
+          ? level2BgLoaded
+          : levelBgLoaded;
+    if (loaded) {
+      ctx.drawImage(img, ext.start, 0, w, VIEW_H);
     }
-  } else {
-    ctx.fillStyle = "#d0d0d0";
-    ctx.fillRect(0, 0, world.def.width, VIEW_H);
   }
+
+  drawWeather();
 
   // ground line — semi-transparent so the dirt texture from levelbg.png
   // shows through instead of being completely hidden behind a flat fill
@@ -2040,75 +2830,6 @@ function draw() {
   for (const g of world.def.ground) {
     ctx.fillRect(g.x, world.def.groundY, g.width, VIEW_H);
   }
-
-  // gravel ground (Level 2 / Stage 3) — a band of scattered pebbles right
-  // at the surface so gravel patches read as a distinct, walkable texture
-  // instead of just plain ground. Pebble positions are derived from each
-  // segment's own x/width (not random per frame), so the texture stays put
-  // instead of shimmering as the camera pans.
-  ctx.fillStyle = "#8a8378";
-  for (const g of world.def.ground) {
-    if (g.surface !== "gravel") continue;
-    const bandTop = world.def.groundY;
-    const bandHeight = 10;
-    ctx.fillRect(g.x, bandTop, g.width, bandHeight);
-    const pebbleSpacing = 14;
-    const count = Math.floor(g.width / pebbleSpacing);
-    for (let i = 0; i < count; i++) {
-      // Deterministic pseudo-scatter from the pebble's own index/position
-      // (no Math.random()) so the same segment always draws identically.
-      const seed = g.x + i * pebbleSpacing;
-      const jitterY = (seed % 5) - 2;
-      const jitterX = ((seed * 7) % 6) - 3;
-      const r = 1.5 + ((seed * 3) % 3) * 0.5;
-      ctx.beginPath();
-      ctx.arc(
-        g.x + i * pebbleSpacing + jitterX,
-        bandTop + bandHeight / 2 + jitterY,
-        r,
-        0,
-        Math.PI * 2,
-      );
-      ctx.fillStyle = i % 2 === 0 ? "#6f685d" : "#a49b8c";
-      ctx.fill();
-    }
-  }
-
-  // background lightning ray (Level 2 / Stage 4) — purely visual, no
-  // collision, drawn in world space (so it stays put over the level
-  // instead of tracking the camera) right after the backdrop, same as
-  // the trees below.
-  drawWeather();
-
-  // decorative trees (Level 2's evenly-spaced tree.png) — purely visual,
-  // no collision, so they're drawn early as background scenery.
-  for (const tr of world.def.trees || []) {
-    const ty = world.def.groundY - tr.height;
-    if (treeLoaded) {
-      ctx.drawImage(treeImg, tr.x, ty, tr.width, tr.height);
-    } else {
-      ctx.fillStyle = "#4d7a48";
-      ctx.fillRect(tr.x, ty, tr.width, tr.height);
-    }
-  }
-
-  // birds perched in the trees (mechanically these are birds, not
-  // hazards; see updateBirds()).
-  for (const b of world.birdState || []) {
-    if (birdImgLoaded) {
-      ctx.drawImage(birdImg, b.x, b.y, b.width, b.height);
-    } else {
-      ctx.fillStyle = "#8a5a3a";
-      ctx.fillRect(b.x, b.y, b.width, b.height);
-    }
-  }
-
-  // storm removed: no storm visuals to draw here
-
-  // Level 2-2's background cars + NPC (with its code speech-bubble) —
-  // purely a visual/informational layer, no collision, so it's drawn as
-  // background scenery alongside the trees/birds above.
-  drawCarsAndNpc();
 
   for (const t of world.trapState) {
     if (t.fallen) {
@@ -2149,23 +2870,22 @@ function draw() {
     const imgReady = useDog ? dogLoaded : whitedogLoaded;
     if (imgReady) {
       ctx.drawImage(img, gx, gy, g.width, g.height);
-    } else {
-      ctx.fillStyle = "#ff3b3b";
-      ctx.fillRect(gx, gy, g.width, g.height);
     }
   }
 
   // blocking blocks (solid obstacles the player must jump over)
   for (const b of world.def.blocks || []) {
     const top = world.def.groundY - b.height;
-    if (box2Loaded) {
+    if (b.sprite === "truck") {
+      if (truckLoaded) ctx.drawImage(truckImg, b.x, top, b.width, b.height);
+    } else if (b.sprite === "stackedbox") {
+      if (box2Loaded) {
+        const half = b.height / 2;
+        ctx.drawImage(box2Img, b.x, top, b.width, half);
+        ctx.drawImage(box2Img, b.x, top + half, b.width, half);
+      }
+    } else if (box2Loaded) {
       ctx.drawImage(box2Img, b.x, top, b.width, b.height);
-    } else {
-      ctx.fillStyle = "#6b6b6b";
-      ctx.fillRect(b.x, top, b.width, b.height);
-      ctx.strokeStyle = "#444444";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(b.x, top, b.width, b.height);
     }
   }
 
@@ -2192,18 +2912,104 @@ function draw() {
 
     if (imgReady) {
       ctx.drawImage(img, hz.x, hzY, hz.width, hz.height);
-    } else {
-      // fallback
-      ctx.fillStyle = "#ff3b3b";
-      ctx.fillRect(hz.x, hzY, hz.width, hz.height);
+    }
+  }
+
+  // ---- Level 3 / Stage 1 — duck followers ----
+  for (const d of world.duckState || []) {
+    if (!d.active) continue;
+
+    if (duckLoaded) {
+      if (d.facing === 1) {
+        ctx.save();
+        ctx.translate(d.curX + DUCK_W, d.curY);
+        ctx.scale(-1, 1);
+        ctx.drawImage(duckImg, 0, 0, DUCK_W, DUCK_H);
+        ctx.restore();
+      } else {
+        ctx.drawImage(duckImg, d.curX, d.curY, DUCK_W, DUCK_H);
+      }
+    }
+  }
+
+  // ---- Level 3 / Stage 2 — falling dialogue bubbles ----
+  for (const b of world.bubbleState || []) {
+    if (b.caught || b.missed) continue;
+    if (bubbleLoaded) {
+      ctx.drawImage(
+        bubbleImg,
+        b.curX - BUBBLE_WIDTH / 2,
+        b.curY - BUBBLE_SIZE / 2,
+        BUBBLE_WIDTH,
+        BUBBLE_SIZE,
+      );
+    }
+  }
+
+  // ---- Level 3 / Stage 3 — supportive NPCs ----
+  for (const n of world.npcState || []) {
+    ctx.fillStyle = n.charge >= n.chargeTime ? "#7CD992" : "#9FB6C9";
+    ctx.beginPath();
+    ctx.arc(n.x, n.y - 32, 20, 0, Math.PI * 2);
+    ctx.fill();
+    // charge ring
+    ctx.strokeStyle = "#2E7D32";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(
+      n.x,
+      n.y - 32,
+      26,
+      -Math.PI / 2,
+      -Math.PI / 2 + (n.charge / n.chargeTime) * Math.PI * 2,
+    );
+    ctx.stroke();
+  }
+
+  // ---- Level 3 / Stage 5 — jump-boost NPCs ----
+  // Same charge-ring look as the Stage 3 supportive NPCs, in a blue
+  // palette so it reads as a different kind of boost (jump vs. speed).
+  for (const n of world.jumpBoostState || []) {
+    ctx.fillStyle = n.charge >= n.chargeTime ? "#7EC8FF" : "#9FB6C9";
+    ctx.beginPath();
+    ctx.arc(n.x, n.y - 32, 20, 0, Math.PI * 2);
+    ctx.fill();
+    // charge ring
+    ctx.strokeStyle = "#1B5FA8";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(
+      n.x,
+      n.y - 32,
+      26,
+      -Math.PI / 2,
+      -Math.PI / 2 + (n.charge / n.chargeTime) * Math.PI * 2,
+    );
+    ctx.stroke();
+  }
+
+  // ---- Stage 4 — pushing NPCs ----
+  for (const npc of world.pushingNpcState || []) {
+    const npcY = world.def.groundY - PUSHING_NPC_H;
+
+    if (npcLoaded) {
+      // direction 1 = walking right; sprite's native art faces right,
+      // so flip when moving left (same convention as the ducks, inverted).
+      if (npc.direction === -1) {
+        ctx.save();
+        ctx.translate(npc.currentX + PUSHING_NPC_W, npcY);
+        ctx.scale(-1, 1);
+        ctx.drawImage(npcImg, 0, 0, PUSHING_NPC_W, PUSHING_NPC_H);
+        ctx.restore();
+      } else {
+        ctx.drawImage(npcImg, npc.currentX, npcY, PUSHING_NPC_W, PUSHING_NPC_H);
+      }
     }
   }
 
   // mailbox checkpoints, honoring each one's mb.y override. Renders
   // mailboxup.png until the checkpoint is reached, then swaps to
-  // mailboxdown.png to show that stage has been cleared. A locked
-  // mailbox (Level 2-2) additionally gets a small padlock badge so it
-  // reads as "not ready yet" rather than broken/unreachable.
+  // mailboxdown.png to show that stage has been cleared.
   for (const mb of world.mailboxes) {
     const mbTop = mb.y !== undefined ? mb.y : world.def.groundY - mb.height;
 
@@ -2212,88 +3018,148 @@ function draw() {
 
     if (mailboxReady) {
       ctx.drawImage(mailboxImg, mb.x, mbTop, mb.width, mb.height);
-    } else {
-      // flat-color fallback if the art hasn't loaded yet / failed to load
-      ctx.fillStyle = "#9c6b2a";
-      ctx.fillRect(mb.x - 6, mbTop - 6, mb.width + 12, mb.height + 6);
-      ctx.fillStyle = "#c9c9c9";
-      ctx.fillRect(mb.x, mbTop, mb.width, mb.height);
-    }
-
-    if (mb.locked) {
-      ctx.fillStyle = "#ffd23f";
-      ctx.font = "bold 20px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("\uD83D\uDD12", mb.x + mb.width / 2, mbTop - 10);
-      ctx.textAlign = "left";
     }
   }
+
+  // ---- Level 2 — decorative trees + perched birds ----
+  for (const tr of world.def.trees || []) {
+    if (treeLoaded) {
+      ctx.drawImage(
+        treeImg,
+        tr.x,
+        world.def.groundY - tr.height,
+        tr.width,
+        tr.height,
+      );
+    }
+  }
+  for (const b of world.birdState || []) {
+    if (birdImgLoaded) {
+      ctx.drawImage(birdImg, b.x, b.y, b.width, b.height);
+    }
+  }
+
+  // ---- Level 2 / Stage 2 — code-lock NPC + cars + speech bubble ----
+  drawCarsAndNpc();
 
   // player
   if (player.alive || deathFlashTimer > 0) {
     drawPlayer();
   }
 
-  // brief visual cue while a bird chirp has the player's controls locked
-  if (freezeTimer > 0) {
-    ctx.fillStyle = "rgba(120, 180, 255, 0.35)";
-    ctx.fillRect(player.x - 4, player.y - 4, player.w + 8, player.h + 8);
+  // ---- Level 3 / Stage 2 — catch counter above the player's head ----
+  // Gated by the actual mailbox boundaries (the checkpoint before this
+  // stage and this stage's own mailbox) rather than the section's raw
+  // start/endX, so it can't bleed a bit into the next stage/checkpoint.
+  if (player.alive) {
+    const curSection = getCurrentSection();
+    const stageBubbles = (world.bubbleState || []).filter(
+      (b) =>
+        b.levelIndex === curSection.levelIndex &&
+        b.stageIndex === curSection.stageIndex,
+    );
+    if (stageBubbles.length > 0) {
+      const ownMailbox = world.mailboxes.find(
+        (m) =>
+          m.levelIndex === curSection.levelIndex &&
+          m.stageIndex === curSection.stageIndex,
+      );
+      const prevMailbox = world.mailboxes.find(
+        (m) =>
+          m.levelIndex === curSection.levelIndex &&
+          m.stageIndex === curSection.stageIndex - 1,
+      );
+      const lo = prevMailbox ? prevMailbox.x : curSection.startX;
+      const hi = ownMailbox ? ownMailbox.x + ownMailbox.width : curSection.endX;
+
+      if (player.x >= lo && player.x <= hi) {
+        const caught = stageBubbles.filter((b) => b.caught).length;
+        const text = `${caught}/${stageBubbles.length}`;
+        const tx = player.x + player.w / 2;
+        const ty = player.y - 16;
+        ctx.font = "bold 20px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "#000";
+        ctx.strokeText(text, tx, ty);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(text, tx, ty);
+        ctx.textAlign = "left";
+      }
+    }
+  }
+
+  // ---- Level 2 / Stage 3 \u2014 noise meter above the player's head ----
+  if (
+    player.alive &&
+    (getGroundSurfaceAt(player.x) === "gravel" || noiseLevel > 0)
+  ) {
+    const barW = 46;
+    const barH = 7;
+    const bx = player.x + player.w / 2 - barW / 2;
+    const by = player.y - 16;
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(bx, by, barW, barH);
+    ctx.fillStyle = noiseLevel > NOISE_MAX * 0.7 ? "#ff5b5b" : "#f0c95f";
+    ctx.fillRect(bx, by, barW * (noiseLevel / NOISE_MAX), barH);
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, barW, barH);
+  }
+
+  // ---- Level 2 — bird-chirp freeze indicator above the player's head ----
+  if (player.alive && (freezeTimer > 0 || isBirdWarningActive())) {
+    const pulse = 0.6 + Math.sin(gameTime * 14) * 0.4;
+    const tx = player.x + player.w / 2;
+    const ty = player.y - 30;
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = "#ffd23f";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(tx, ty, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#1a1a1a";
+    ctx.font = "bold 16px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("!", tx, ty + 1);
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  }
+
+  // ---- Level 2 / Stage 5 — red warning text before the dogs start barking ----
+  if (player.alive && isBarkWarningActive()) {
+    const barkPulse = 0.6 + Math.sin(gameTime * 14) * 0.4;
+    ctx.globalAlpha = barkPulse;
+    ctx.fillStyle = "#ff3b3b";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 3;
+    ctx.font = "bold 28px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.strokeText("DOGS BARKING SOON — CONTROLS WILL FLIP!", VIEW_W / 2, 60);
+    ctx.fillText("DOGS BARKING SOON — CONTROLS WILL FLIP!", VIEW_W / 2, 60);
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
   }
 
   ctx.restore();
-
-  // ---- noise meter HUD (Level 2 / Stage 3 only) ----
-  // Drawn in screen space (after ctx.restore(), so it ignores the camera
-  // translate above) and only while the player is actually on that stage —
-  // every other stage/level never shows it.
-  const onGravelStageHud = world.def.levelIndex === 1 && getSectionIndexForX(player.x) === 2;
-  if (onGravelStageHud) {
-    const barW = 200;
-    const barH = 18;
-    const margin = 18;
-    const barX = VIEW_W - barW - margin - 50;
-    const barY = margin;
-
-    // label
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 13px sans-serif";
-    ctx.textAlign = "right";
-    ctx.fillText("NOISE", barX + barW, barY - 6);
-    ctx.textAlign = "left";
-
-    // background/track
-    ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-    ctx.fillRect(barX - 3, barY - 3, barW + 6, barH + 6);
-    ctx.fillStyle = "#3a3a3a";
-    ctx.fillRect(barX, barY, barW, barH);
-
-    // fill — green when quiet, sliding to red as it fills up
-    const pct = Math.max(0, Math.min(1, noiseLevel / NOISE_MAX));
-    const fillW = barW * pct;
-    const hue = 120 - pct * 120; // 120 (green) -> 0 (red)
-    ctx.fillStyle = `hsl(${hue}, 85%, 50%)`;
-    ctx.fillRect(barX, barY, fillW, barH);
-
-    // border
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(barX, barY, barW, barH);
-  }
 }
-
 function drawPlayer() {
-  // Level 5's blink mechanic now drives the last stage's hazard boxes
-  // (see draw()'s hazard loop), not the player — the player always
-  // renders normally.
+  // Level 5's blink mechanic drives the last stage's hazard boxes (see
+  // draw()'s hazard loop), not the player — the player always renders
+  // normally.
   const x = player.x;
   const y = player.y;
   const w = player.w;
   const h = player.h;
 
-  // fallback while loading (no sprite yet)
+  // no sprite fallback — wait for the real image
   if (!spriteLoaded) {
-    ctx.fillStyle = "#000";
-    ctx.fillRect(x, y, w, h);
     return;
   }
 
@@ -2303,8 +3169,9 @@ function drawPlayer() {
   const row = player.facing === -1 ? 0 : 1;
 
   // Animate only while a direction key is actually held down. Using vx
-  // here would keep the walk-cycle running on Level 3 while the player
-  // slides to a stop from friction after letting go of the key.
+  // here would keep the walk-cycle running on Level 1 / Stage 3 while
+  // the player slides to a stop from friction after letting go of the
+  // key.
   const isMoving = player.grounded && (keys.left || keys.right);
 
   const col = isMoving
@@ -2353,11 +3220,9 @@ function frame(timestamp) {
     levelSelectEl &&
     levelSelectEl.root.style.display !== "none";
 
-  const keypadOpen = !!(keypadEl && keypadEl.root.style.display === "flex");
-
-  if (!overlay.classList.contains("hidden") || levelSelectOpen || keypadOpen) {
-    // paused while overlay (level intro / end screen), the level-select
-    // grid, or the code-entry keypad is up
+  if (!overlay.classList.contains("hidden") || levelSelectOpen) {
+    // paused while overlay (level intro / end screen) or the level-select
+    // grid is up
     requestAnimationFrame(frame);
     return;
   }

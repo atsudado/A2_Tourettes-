@@ -69,7 +69,6 @@ Post Showcase:
 | `assets/sounds/game_music.mp3` [4]         | Sourced from Pixabay               |
 | `assets/sounds/jump_sound.mp3` [3]         | Sourced from Pixabay               |
 | `assets/sounds/mailbox_bell.mp3` [5]       | Sourced from Pixabay               |
-| `assets/sounds/gravel_footsteps.mp3` [6]   | "Walk On Gravel" Sound Effect       |
 
 
 ## References
@@ -83,5 +82,3 @@ Post Showcase:
 [4] Pixabay. n.d. Musical Music for Game Fun Kid Game. Sound effect. Retrieved July 7, 2026 from https://pixabay.com/sound-effects/musical-music-for-game-fun-kid-game-163649/
 
 [5] Pixabay. n.d. Film Special Effects Bell Sound. Sound effect. Retrieved July 7, 2026 from https://pixabay.com/sound-effects/film-special-effects-bell-sound-370341/
-
-[6] Sound Library. n.d. Walk On Gravel - Sound Effect for editing. Sound effect. User-provided file.
