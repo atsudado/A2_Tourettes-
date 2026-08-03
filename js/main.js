@@ -38,7 +38,7 @@ const BIRD_FREEZE_DURATION = 1.5;
 // drains while quiet; reaching NOISE_MAX kills the player.
 let noiseLevel = 0;
 const NOISE_MAX = 100;
-const NOISE_RATE_UP = 38;
+const NOISE_RATE_UP = 53.2;
 const NOISE_RATE_DOWN = 22;
 
 // Per-level x-extent (min startX / max endX across that level's stages),
@@ -105,6 +105,14 @@ const BOX2_SRC = "assets/images/2box.png";
 const box2Img = new Image();
 box2Img.src = BOX2_SRC;
 let box2Loaded = false;
+
+// Level 3 / Checkpoint 1's "stacked boxes" obstacle uses its own
+// stackedboxes.png sprite (drawn at its native aspect ratio — do not
+// stretch it, the source art is ~186x187px).
+const STACKEDBOXES_SRC = "assets/images/stackedboxes.png";
+const stackedboxesImg = new Image();
+stackedboxesImg.src = STACKEDBOXES_SRC;
+let stackedboxesLoaded = false;
 
 // Stage 5's dogs (the two flashing tree/balcony hazards, plus the
 // ground-patrol dogs under the hedges) use their own whitedog.png sprite
@@ -457,6 +465,11 @@ function preloadAllAssets() {
     preloadImage(boxImg, BOX_SRC, (ok) => (boxLoaded = ok)),
     preloadImage(dogImg, DOG_SRC, (ok) => (dogLoaded = ok)),
     preloadImage(box2Img, BOX2_SRC, (ok) => (box2Loaded = ok)),
+    preloadImage(
+      stackedboxesImg,
+      STACKEDBOXES_SRC,
+      (ok) => (stackedboxesLoaded = ok),
+    ),
     preloadImage(whitedogImg, WHITEDOG_SRC, (ok) => (whitedogLoaded = ok)),
     preloadImage(npcImg, NPC_SRC, (ok) => (npcLoaded = ok)),
     preloadImage(truckImg, TRUCK_SRC, (ok) => (truckLoaded = ok)),
@@ -489,10 +502,11 @@ function makePlayer(spawn) {
     invulnTimer: 0,
     slowTimer: 0,
     slowFactor: 1,
-    // Level 3 / Stage 5 (jump-boost NPCs): temporary higher jump after
-    // fully charging near one of the stage's supportive NPCs.
-    jumpBoostTimer: 0,
-    jumpBoostMultiplier: 1,
+    // Level 3 / Checkpoint 1's super-jump NPC: stand near him for 2s to
+    // bank a single boosted jump (persists after walking away, consumed
+    // the next time the player jumps).
+    superJumpReady: false,
+    superJumpMultiplier: 1,
   };
 }
 
@@ -1601,7 +1615,7 @@ const BIRD_WARN_LEAD = 0.4;
 const BIRD_WARN_GAP = 0.15;
 
 function isBirdWarningActive() {
-  if (!areLevel2Stage1BirdsActive()) return false;
+  if (!areLevel2Stage1BirdsActive() && !areCheckpoint2BirdsActive()) return false;
   return (world.birdState || []).some(
     (b) => b.chirpTimer > BIRD_WARN_GAP && b.chirpTimer <= BIRD_WARN_LEAD,
   );
@@ -1621,12 +1635,24 @@ function areLevel2Stage1BirdsActive() {
   return !mb || player.x < mb.x;
 }
 
+function areCheckpoint2BirdsActive() {
+  const curSection = getCurrentSection();
+  if (curSection.levelIndex !== 2 || curSection.stageIndex !== 1) return false;
+  const mb = world.mailboxes.find(
+    (m) => m.levelIndex === 2 && m.stageIndex === 1,
+  );
+  if (mb && player.x >= mb.x) return false;
+  const stageWidth = curSection.endX - curSection.startX;
+  const halfStageX = curSection.startX + stageWidth / 2;
+  return player.x < halfStageX;
+}
+
 function updateBirds(dt) {
   // Birds only exist in Level 2 / Stage 1 data, but scope explicitly by
   // stage AND that stage's own mailbox activation — so chirping stops
   // the instant the player passes that checkpoint, not just when they
   // cross the raw section boundary further ahead.
-  if (!areLevel2Stage1BirdsActive()) return;
+  if (!areLevel2Stage1BirdsActive() && !areCheckpoint2BirdsActive()) return;
   for (const b of world.birdState || []) {
     b.chirpTimer -= dt;
     if (b.chirpTimer <= 0) {
@@ -2352,48 +2378,32 @@ function updateSupportNPCs(dt) {
   world.speedFactor += (targetFactor - world.speedFactor) * Math.min(1, 2 * dt);
 }
 
-// ---------- Level 3 / Stage 5 — jump-boost NPCs ----------
-// Same "stand near it, let it charge, get a temporary boost" shape as
-// the Stage 3 supportive NPCs above, except the payoff is a taller jump
-// instead of extra speed — enough to clear the tall building blocks in
-// this stage and reach the final checkpoint. Scoped to Level 3 / Stage 5
-// only via each NPC's stageIndex/levelIndex (set in levels.js), so it
-// never touches Stage 3's speed-boost NPCs or any other stage.
+// ---------- Level 3 / Checkpoint 1 — super-jump NPC ----------
+// "Stand near him for 2 seconds to bank a jump boost" — unlike a live
+// proximity boost, the charge here doesn't drain the moment the player
+// steps away mid-charge is reset (so you can't creep in and out to
+// cheese it), but once it hits chargeTime the boost is BANKED onto the
+// player (superJumpReady) and stays available even after walking off,
+// until the next jump consumes it (single-use).
 function updateJumpBoostNpcs(dt) {
-  let bestFraction = 0;
-  let bestMultiplier = 1;
-
   for (const n of world.jumpBoostState || []) {
     const dx = player.x + player.w / 2 - n.x;
     const dy = player.y + player.h / 2 - n.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    // n.radius is deliberately tight — the player has to be directly
-    // below or within a very close range of the circle to load it at
-    // all. Stepping a bit further away unloads it again (discharge),
-    // it doesn't just hold at whatever it reached.
     if (dist <= n.radius) {
       n.charge = Math.min(n.chargeTime, n.charge + dt);
+      if (n.charge >= n.chargeTime) {
+        player.superJumpReady = true;
+        player.superJumpMultiplier = n.jumpMultiplier;
+        n.charge = 0; // reset so standing there again re-charges/re-banks
+      }
     } else {
-      const rate = n.dischargeRate !== undefined ? n.dischargeRate : 1;
-      n.charge = Math.max(0, n.charge - dt * rate);
-    }
-
-    const fraction = n.charge / n.chargeTime;
-    if (fraction > bestFraction) {
-      bestFraction = fraction;
-      // Jump height is relative to how loaded the circle is: half-loaded
-      // gives half of the extra jump height, fully loaded gives the full
-      // configured jumpMultiplier.
-      bestMultiplier = 1 + (n.jumpMultiplier - 1) * fraction;
+      // Stepping away before finishing the charge loses that progress —
+      // has to be a full uninterrupted 2s near him.
+      n.charge = 0;
     }
   }
-
-  // Live boost, not a held timer — it reflects the circle's current
-  // charge, so it fades the instant the player steps away and the
-  // charge starts draining.
-  player.jumpBoostMultiplier = bestFraction > 0 ? bestMultiplier : 1;
-  player.jumpBoostTimer = bestFraction > 0 ? 0.05 : 0;
 }
 
 function getEffectiveSpeedFactor() {
@@ -2407,13 +2417,14 @@ function update(dt) {
 
   if (player.invulnTimer > 0) player.invulnTimer -= dt;
   if (player.slowTimer > 0) player.slowTimer -= dt;
-  if (player.jumpBoostTimer > 0) player.jumpBoostTimer -= dt;
 
-  // The bird freeze (and its warning) is exclusive to Level 2 / Stage 1,
-  // before that stage's mailbox is reached — force-clear it immediately
-  // once the player passes that checkpoint, so it can never bleed into
-  // Stage 2.
-  if (!areLevel2Stage1BirdsActive()) freezeTimer = 0;
+  // The bird freeze (and its warning) is exclusive to the active bird
+  // stage(s), before that stage's mailbox is reached — force-clear it
+  // immediately once the player passes that checkpoint, so it can never
+  // bleed into the next stage.
+  if (!areLevel2Stage1BirdsActive() && !areCheckpoint2BirdsActive()) {
+    freezeTimer = 0;
+  }
   if (freezeTimer > 0) freezeTimer -= dt;
   const isFrozen = freezeTimer > 0;
 
@@ -2472,14 +2483,15 @@ function update(dt) {
 
   // jump
   if (keys.up && player.grounded && !isFrozen) {
-    // Level 3 / Stage 5: a charged-up jump-boost NPC temporarily raises
-    // how high the player can jump, so they can clear the stage's tall
-    // building blocks. Everywhere else this is a no-op since
-    // jumpBoostTimer stays at 0.
-    const boosted = player.jumpBoostTimer > 0;
+    // Level 3 / Checkpoint 1: a single banked super jump (from standing
+    // near the jump-boost NPC for 2s) gets consumed here — one boosted
+    // jump, then it's gone until re-charged. Everywhere else this is a
+    // no-op since superJumpReady stays false.
+    const boosted = player.superJumpReady;
     player.vy = boosted
-      ? JUMP_VELOCITY * player.jumpBoostMultiplier
+      ? JUMP_VELOCITY * player.superJumpMultiplier
       : JUMP_VELOCITY;
+    if (boosted) player.superJumpReady = false;
     player.grounded = false;
     playJumpSound();
     triggerJumpTraps();
@@ -2869,7 +2881,11 @@ function draw() {
     const img = useDog ? dogImg : whitedogImg;
     const imgReady = useDog ? dogLoaded : whitedogLoaded;
     if (imgReady) {
-      ctx.drawImage(img, gx, gy, g.width, g.height);
+      const naturalWidth = useDog ? 128 : 316;
+      const naturalHeight = useDog ? 128 : 224;
+      const scale = g.width / naturalWidth;
+      const drawHeight = naturalHeight * scale;
+      ctx.drawImage(img, gx, gy - (drawHeight - g.height), g.width, drawHeight);
     }
   }
 
@@ -2878,6 +2894,9 @@ function draw() {
     const top = world.def.groundY - b.height;
     if (b.sprite === "truck") {
       if (truckLoaded) ctx.drawImage(truckImg, b.x, top, b.width, b.height);
+    } else if (b.sprite === "stackedboxes") {
+      if (stackedboxesLoaded)
+        ctx.drawImage(stackedboxesImg, b.x, top, b.width, b.height);
     } else if (b.sprite === "stackedbox") {
       if (box2Loaded) {
         const half = b.height / 2;
@@ -2966,13 +2985,16 @@ function draw() {
     ctx.stroke();
   }
 
-  // ---- Level 3 / Stage 5 — jump-boost NPCs ----
+  // ---- Level 3 / Checkpoint 1 — super-jump NPC ----
   // Same charge-ring look as the Stage 3 supportive NPCs, in a blue
   // palette so it reads as a different kind of boost (jump vs. speed).
+  // Ring fills over the 2s stand-near charge; once full it banks a
+  // single-use super jump and the ring resets to empty.
   for (const n of world.jumpBoostState || []) {
+    const ringY = n.y - 82;
     ctx.fillStyle = n.charge >= n.chargeTime ? "#7EC8FF" : "#9FB6C9";
     ctx.beginPath();
-    ctx.arc(n.x, n.y - 32, 20, 0, Math.PI * 2);
+    ctx.arc(n.x, ringY, 20, 0, Math.PI * 2);
     ctx.fill();
     // charge ring
     ctx.strokeStyle = "#1B5FA8";
@@ -2980,7 +3002,7 @@ function draw() {
     ctx.beginPath();
     ctx.arc(
       n.x,
-      n.y - 32,
+      ringY,
       26,
       -Math.PI / 2,
       -Math.PI / 2 + (n.charge / n.chargeTime) * Math.PI * 2,

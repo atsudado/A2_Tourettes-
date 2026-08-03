@@ -196,14 +196,55 @@ const LEVEL_3_STAGES = [
     intro:
       "Not every reaction is unkind — but it can still feel like too much.\n" +
       "Stay aware. Keep moving forward.",
-    width: 1280,
+    width: 2134,
     groundY: 550,
     spawn: { x: 80, y: 450 },
-    door: { x: 1150, width: 56, height: 90 },
-    ground: [{ x: 0, width: 1280 }],
-    trapGround: [],
+    door: { x: 2004, width: 56, height: 90 },
+    ground: [{ x: 0, width: 2134 }],
+    trapGround: [{ x: 1006, width: 96 }],
     movingPlatforms: [],
     hazards: [],
+    groundHazards: [
+      {
+        x: 1608,
+        width: 64,
+        height: 64,
+        sprite: "whitedog",
+        range: 392,
+        speed: 140,
+      },
+    ],
+    // Obstacle 1 — "stacked boxes" (stackedboxes.png, drawn at its native
+    // ~186x187 aspect ratio, not stretched). At 187px tall this clears
+    // the player's normal jump apex (~128px), so it can't be jumped over
+    // yet — intentional until the planned superjump feature exists.
+    blocks: [
+      { x: 560, width: 186, height: 187, sprite: "stackedboxes" },
+      { x: 915, width: 79, height: 97, sprite: "box2" },
+      { x: 1403, width: 186, height: 187, sprite: "stackedboxes" },
+    ],
+    // Super-jump NPC — the background art already shows the guy telling
+    // you to talk to him; this is just his hitbox. Stand within `radius`
+    // of him for the full `chargeTime` (2s, uninterrupted) to bank a
+    // single-use super jump — it stays available even after walking
+    // away, until your next jump uses it up. jumpMultiplier is tuned so
+    // that boosted jump clears the 187px-tall stacked boxes at x:560.
+    jumpBoostNpcs: [
+      {
+        x: 407,
+        y: 518,
+        radius: 60,
+        chargeTime: 2,
+        jumpMultiplier: 1.4,
+      },
+      {
+        x: 1250,
+        y: 518,
+        radius: 60,
+        chargeTime: 2,
+        jumpMultiplier: 1.4,
+      },
+    ],
   },
 
   {
@@ -211,14 +252,36 @@ const LEVEL_3_STAGES = [
     intro:
       "Keeping up a conversation means catching every part of it.\n" +
       "Don't let any of it fall past you.",
-    width: 1280,
+    width: 2133,
     groundY: 550,
     spawn: { x: 80, y: 450 },
-    door: { x: 1150, width: 56, height: 90 },
-    ground: [{ x: 0, width: 1280 }],
+    door: { x: 2003, width: 56, height: 90 },
+    ground: [
+      { x: 0, width: 27 },
+      { x: 27, width: 930, surface: "gravel" },
+      { x: 957, width: 1176 },
+    ],
     trapGround: [],
     movingPlatforms: [],
-    hazards: [],
+    blocks: [
+      { x: 2932, width: 61, height: 53, sprite: "box" },
+    ],
+    hazards: [
+      {
+        x: 420,
+        width: 79,
+        height: 56,
+        sprite: "dog",
+        flash: true,
+        flashOn: 1,
+        flashOff: 0.5,
+        flashPhase: 0.2,
+      },
+    ],
+    birds: [
+      { x: 250, y: 150, width: 48, height: 40 },
+      { x: 650, y: 110, width: 48, height: 40 },
+    ],
   },
 
   {
@@ -226,46 +289,21 @@ const LEVEL_3_STAGES = [
     intro:
       "On your own, some gaps feel too wide to clear.\n" +
       "Stay near the people who support you, and hold T to lean on them — they'll help you build the speed to cross.",
-    width: 1280,
+    width: 2133,
     groundY: 550,
     spawn: { x: 80, y: 450 },
-    door: { x: 1150, width: 56, height: 90 },
-    ground: [{ x: 0, width: 1280 }],
+    door: { x: 2003, width: 56, height: 90 },
+    ground: [{ x: 0, width: 2133 }],
     trapGround: [],
     movingPlatforms: [],
     hazards: [],
   },
 
-  {
-    title: "Stage 4 — Persistent Tics",
-    intro:
-      "Some tics don't stop once they start.\n" +
-      "They keep going, pulling you along — and if you resist, you fall behind.\n" +
-      "Sometimes you have to move with the tic, not against it.",
-    width: 1280,
-    groundY: 550,
-    spawn: { x: 80, y: 450 },
-    door: { x: 1150, width: 56, height: 90 },
-    ground: [{ x: 0, width: 1280 }],
-    trapGround: [],
-    movingPlatforms: [],
-    hazards: [],
-  },
-
-  {
-    title: "Stage 5 — Moving Forward",
-    intro:
-      "Sometimes you need a little help to reach new heights.\n" +
-      "Use what's around you — and the people who support you.",
-    width: 1280,
-    groundY: 550,
-    spawn: { x: 80, y: 450 },
-    door: { x: 1150, width: 56, height: 90 },
-    ground: [{ x: 0, width: 1280 }],
-    trapGround: [],
-    movingPlatforms: [],
-    hazards: [],
-  },
+  // Team pivot: Level 3 is now 3 checkpoints instead of 5 (L3-1/2/3).
+  // Stages 4 & 5 were removed rather than left in unbuilt/unlocked, so
+  // isStageBuilt() naturally treats them as not-built and the level
+  // select grid greys them out. If a 4th/5th checkpoint comes back
+  // later, just re-add stage objects here in the same shape as above.
 ];
 
 // ============================================================

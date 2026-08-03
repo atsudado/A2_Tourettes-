@@ -242,6 +242,13 @@ function refreshLevelSelectGrid(grid) {
   // unlocked immediately, without needing to re-complete Level 1.
   bridgeUnbuiltLevels();
 
+  // PLAYTESTING: Level 3 is the only level being worked on right now, so
+  // its first checkpoint (L3-1) is always force-unlocked here rather than
+  // depending on Levels 1/2 being completed first. Safe/idempotent (just
+  // adds an unlock if it isn't already there). Remove this once Level 3
+  // is meant to be reached through normal progression again.
+  Progress.unlock(2, 0);
+
   grid.innerHTML = "";
 
   for (let levelIdx = 0; levelIdx < LEVEL_COUNT; levelIdx++) {
