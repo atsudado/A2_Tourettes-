@@ -123,6 +123,15 @@ const whitedogImg = new Image();
 whitedogImg.src = WHITEDOG_SRC;
 let whitedogLoaded = false;
 
+// Level 3 / Checkpoint 3's "stairs" obstacle uses its own stairs.png
+// sprite (drawn at its native aspect ratio — do not stretch it, the
+// source art is ~148x131px). Acts like a jumpable step obstacle, same
+// solid-collision mechanics as the other `blocks` entries.
+const STAIRS_SRC = "assets/images/stairs.png";
+const stairsImg = new Image();
+stairsImg.src = STAIRS_SRC;
+let stairsLoaded = false;
+
 const DUCK_SRC = "assets/images/duck.png";
 const duckImg = new Image();
 duckImg.src = DUCK_SRC;
@@ -471,6 +480,7 @@ function preloadAllAssets() {
       (ok) => (stackedboxesLoaded = ok),
     ),
     preloadImage(whitedogImg, WHITEDOG_SRC, (ok) => (whitedogLoaded = ok)),
+    preloadImage(stairsImg, STAIRS_SRC, (ok) => (stairsLoaded = ok)),
     preloadImage(npcImg, NPC_SRC, (ok) => (npcLoaded = ok)),
     preloadImage(truckImg, TRUCK_SRC, (ok) => (truckLoaded = ok)),
     preloadImage(duckImg, DUCK_SRC, (ok) => (duckLoaded = ok)),
@@ -2897,6 +2907,8 @@ function draw() {
     } else if (b.sprite === "stackedboxes") {
       if (stackedboxesLoaded)
         ctx.drawImage(stackedboxesImg, b.x, top, b.width, b.height);
+    } else if (b.sprite === "stairs") {
+      if (stairsLoaded) ctx.drawImage(stairsImg, b.x, top, b.width, b.height);
     } else if (b.sprite === "box") {
       if (boxLoaded) {
         ctx.drawImage(boxImg, b.x, top, b.width, b.height);

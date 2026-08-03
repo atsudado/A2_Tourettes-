@@ -312,21 +312,42 @@ const LEVEL_3_STAGES = [
     groundY: 550,
     spawn: { x: 80, y: 450 },
     door: { x: 2003, width: 56, height: 90 },
+    // Hole right after the stairs. Global level coordinates (assuming
+    // the full 6400px-wide level: stage1 width 2134 + stage2 width
+    // 2133 = 4267px offset before this stage starts) were 4429–4879;
+    // converted to this stage's local coordinates that's 162–612
+    // (4429-4267=162, 4879-4267=612), a 450px-wide gap in the ground.
     ground: [
-      { x: 0, width: 1539 },
-      { x: 1689, width: 444 },
+      { x: 0, width: 462 },
+      { x: 612, width: 2133 - 612 },
     ],
-    trapGround: [{ x: 1539, width: 150, prefallen: true }],
+    // `prefallen` pit so the hole actually renders (dark pit interior +
+    // fallen slab graphic) instead of just showing the background art,
+    // which reads identically to solid ground since ground itself is
+    // drawn fully transparent.
+    trapGround: [{ x: 462, width: 450, prefallen: true }],
+    // Moving platform shuttling back and forth over the hole, exactly
+    // spanning it (x:162 to x:162+450=612) so it's reachable from
+    // either edge no matter where it currently is. Raised 50px higher
+    // (y 480 -> 430) and sped up (speed 1.2 -> 3.5).
     movingPlatforms: [
-      { x: 1440, y: 430, width: 92, height: 14, range: 170, speed: 1.0, phase: 0.0 },
-    ],
-    blocks: [
-      { x: 120, width: 60, height: 40, sprite: "box" },
-      { x: 190, width: 60, height: 80, sprite: "box" },
-      { x: 260, width: 60, height: 120, sprite: "box" },
-      { x: 330, width: 60, height: 160, sprite: "box" },
+      {
+        x: 362,
+        y: 430,
+        width: 100,
+        height: 14,
+        range: 350,
+        speed: 105.5,
+        phase: 0,
+      },
     ],
     hazards: [],
+    // Stairs obstacle at the start of the checkpoint (stairs.png, drawn
+    // at its native ~148x131 aspect ratio, not stretched). Placed just
+    // past spawn so it reads as the first thing the player meets;
+    // short enough at 131px tall to clear the player's normal jump
+    // apex (~128px), acting like a step to hop over.
+    blocks: [{ x: 250, width: 148, height: 111, sprite: "stairs" }],
   },
 
   // Team pivot: Level 3 is now 3 checkpoints instead of 5 (L3-1/2/3).
