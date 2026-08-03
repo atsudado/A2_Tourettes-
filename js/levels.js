@@ -298,8 +298,8 @@ const LEVEL_3_STAGES = [
       },
     ],
     birds: [
-      { x: 250, y: 150, width: 48, height: 40 },
-      { x: 650, y: 110, width: 48, height: 40 },
+      { x: 250, y: 1550, width: 48, height: 40 },
+      { x: 650, y: 1510, width: 48, height: 40 },
     ],
   },
 
