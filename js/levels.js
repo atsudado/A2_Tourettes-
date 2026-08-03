@@ -258,13 +258,32 @@ const LEVEL_3_STAGES = [
     door: { x: 2003, width: 56, height: 90 },
     ground: [
       { x: 0, width: 27 },
-      { x: 27, width: 930, surface: "gravel" },
-      { x: 957, width: 1176 },
+      { x: 27, width: 1039, surface: "gravel" },
+      { x: 1310, width: 823 },
     ],
-    trapGround: [],
-    movingPlatforms: [],
+    trapGround: [{ x: 1066, width: 450, prefallen: true }],
+    movingPlatforms: [
+      {
+        x: 1090,
+        y: 430,
+        width: 92,
+        height: 14,
+        range: 180,
+        speed: 1.2,
+        phase: 0.0,
+      },
+      {
+        x: 1220,
+        y: 390,
+        width: 92,
+        height: 14,
+        range: 180,
+        speed: 1.2,
+        phase: 0.8,
+      },
+    ],
     blocks: [
-      { x: 2932, width: 61, height: 53, sprite: "box" },
+      { x: 832, width: 61, height: 53, sprite: "box" },
     ],
     hazards: [
       {

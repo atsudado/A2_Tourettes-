@@ -82,7 +82,7 @@ const restartBtn = document.getElementById("restart-btn");
 const muteBtn = document.getElementById("mute-btn");
 muteBtn.addEventListener("click", () => setMusicMuted(!musicMuted));
 
-const BOX_SRC = "assets/images/2box.png";
+const BOX_SRC = "assets/images/1box.png";
 const DOG_SRC = "assets/images/dog.png";
 const HAZARD_W = 79;
 const HAZARD_H = 56;
@@ -2897,6 +2897,10 @@ function draw() {
     } else if (b.sprite === "stackedboxes") {
       if (stackedboxesLoaded)
         ctx.drawImage(stackedboxesImg, b.x, top, b.width, b.height);
+    } else if (b.sprite === "box") {
+      if (boxLoaded) {
+        ctx.drawImage(boxImg, b.x, top, b.width, b.height);
+      }
     } else if (b.sprite === "stackedbox") {
       if (box2Loaded) {
         const half = b.height / 2;
