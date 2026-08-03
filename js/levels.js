@@ -312,9 +312,20 @@ const LEVEL_3_STAGES = [
     groundY: 550,
     spawn: { x: 80, y: 450 },
     door: { x: 2003, width: 56, height: 90 },
-    ground: [{ x: 0, width: 2133 }],
-    trapGround: [],
-    movingPlatforms: [],
+    ground: [
+      { x: 0, width: 1539 },
+      { x: 1689, width: 444 },
+    ],
+    trapGround: [{ x: 1539, width: 150, prefallen: true }],
+    movingPlatforms: [
+      { x: 1440, y: 430, width: 92, height: 14, range: 170, speed: 1.0, phase: 0.0 },
+    ],
+    blocks: [
+      { x: 120, width: 60, height: 40, sprite: "box" },
+      { x: 190, width: 60, height: 80, sprite: "box" },
+      { x: 260, width: 60, height: 120, sprite: "box" },
+      { x: 330, width: 60, height: 160, sprite: "box" },
+    ],
     hazards: [],
   },
 
