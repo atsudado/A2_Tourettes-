@@ -341,13 +341,63 @@ const LEVEL_3_STAGES = [
         phase: 0,
       },
     ],
-    hazards: [],
+    // Duplicated from Stage 2's flashing dog hazard (dog.png) — spawns
+    // on/off and kills the player on touch, sending them back to this
+    // checkpoint. Placed on solid ground past the hole/moving platform
+    // (ground resumes at x:612) so it doesn't overlap the pit.
+    hazards: [
+      {
+        x: 950,
+        width: 79,
+        height: 56,
+        sprite: "dog",
+        flash: true,
+        flashOn: 1,
+        flashOff: 0.5,
+        flashPhase: 0.2,
+      },
+    ],
     // Stairs obstacle at the start of the checkpoint (stairs.png, drawn
     // at its native ~148x131 aspect ratio, not stretched). Placed just
     // past spawn so it reads as the first thing the player meets;
     // short enough at 131px tall to clear the player's normal jump
     // apex (~128px), acting like a step to hop over.
-    blocks: [{ x: 250, width: 148, height: 111, sprite: "stairs" }],
+    blocks: [
+      { x: 250, width: 148, height: 111, sprite: "stairs" },
+      // Duplicated stackedboxes.png from Stage 1 — paired with the
+      // jumpBoostNpcs entry below (native ~186x187 aspect ratio, not
+      // stretched; too tall to clear without the super jump).
+      { x: 1750, width: 186, height: 187, sprite: "stackedboxes" },
+    ],
+    // Duplicated from Stage 1's whitedog groundHazard (whitedog.png) —
+    // paces back and forth and kills the player on touch, sending them
+    // back to this checkpoint. Placed right after the flashing dog.png
+    // hazard above (x:950) so it's the next thing the player meets.
+    groundHazards: [
+      {
+        x: 1150,
+        width: 64,
+        height: 64,
+        sprite: "whitedog",
+        range: 300,
+        speed: 140,
+      },
+    ],
+    // Duplicated from Stage 1's super-jump NPC + stackedboxes obstacle —
+    // stand within `radius` of the NPC for the full `chargeTime` (2s,
+    // uninterrupted) to bank a single-use super jump, which is needed
+    // to clear the 187px-tall stackedboxes (taller than the player's
+    // normal ~128px jump apex). Placed right after the moving whitedog
+    // above (which paces 1000–1300) so it's the next obstacle met.
+    jumpBoostNpcs: [
+      {
+        x: 1660,
+        y: 518,
+        radius: 60,
+        chargeTime: 2,
+        jumpMultiplier: 1.4,
+      },
+    ],
   },
 
   // Team pivot: Level 3 is now 3 checkpoints instead of 5 (L3-1/2/3).
